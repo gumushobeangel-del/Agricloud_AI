@@ -223,7 +223,7 @@ export class ApiError extends Error {
 // Paths that never need an Authorization header and must never trigger a token
 // refresh attempt. Sending stale tokens to these endpoints can produce confusing
 // 401 / 500 errors that bubble up as sign-in failures.
-const PUBLIC_PATHS = ["/auth/token/", "/auth/register/", "/auth/token/refresh/"];
+const PUBLIC_PATHS = ["/auth/token/", "/auth/register/", "/auth/token/refresh/", "/auth/password-reset/"];
 
 export async function api<T>(path: string, options: RequestInit = {}): Promise<T> {
   const isPublic = PUBLIC_PATHS.some((p) => path.startsWith(p));

@@ -1019,20 +1019,151 @@ function UserAvatar({ user, className }: { user: User; className: string }) {
 }
 
 function AuthPage({ onSignIn, onRegister, error }: { onSignIn: (username: string, password: string) => Promise<void>; onRegister: (data: Record<string, string>) => Promise<void>; error: string }) {
-  const [registering, setRegistering] = useState(false);
+  // Detect if we arrived via a password-reset link (?uid=...&token=...)
+  const params = new URLSearchParams(window.location.search);
+  const resetUid = params.get("uid") ?? "";
+  const resetToken = params.get("token") ?? "";
+  const arrivedViaResetLink = Boolean(resetUid && resetToken);
+
+  const [mode, setMode] = useState<"signin" | "register" | "forgot" | "reset">(
+    arrivedViaResetLink ? "reset" : "signin"
+  );
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(error);
-  const [form, setForm] = useState({ username: "", password: "", first_name: "", last_name: "", email: "", district: "" });
+  const [successMessage, setSuccessMessage] = useState("");
+  const [form, setForm] = useState({ username: "", password: "", newPassword: "", confirmPassword: "", first_name: "", last_name: "", email: "", district: "" });
   useEffect(() => { setMessage(error); }, [error]);
+
   async function submit(event: FormEvent) {
-    event.preventDefault(); setBusy(true); setMessage("");
+    event.preventDefault();
+    setBusy(true);
+    setMessage("");
+    setSuccessMessage("");
     try {
-      if (registering) await onRegister(form);
-      else await onSignIn(form.username, form.password);
-    } catch (err) { setMessage(err instanceof Error ? err.message : "We couldn't complete your request."); }
-    finally { setBusy(false); }
+      if (mode === "register") {
+        await onRegister(form);
+      } else if (mode === "signin") {
+        await onSignIn(form.username, form.password);
+      } else if (mode === "forgot") {
+        await api<{ detail: string }>("/auth/password-reset/", {
+          method: "POST",
+          body: JSON.stringify({ email: form.email }),
+        });
+        setSuccessMessage("If that email is registered, a reset link has been sent. Check your inbox (and spam folder).");
+      } else if (mode === "reset") {
+        if (form.newPassword !== form.confirmPassword) {
+          setMessage("Passwords do not match.");
+          return;
+        }
+        await api<{ detail: string }>("/auth/password-reset/confirm/", {
+          method: "POST",
+          body: JSON.stringify({ uid: resetUid, token: resetToken, password: form.newPassword }),
+        });
+        // Clear reset params from URL and go to sign-in
+        window.history.replaceState({}, "", "/");
+        setSuccessMessage("Password updated successfully. You can now sign in with your new password.");
+        setMode("signin");
+      }
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : "We couldn't complete your request.");
+    } finally {
+      setBusy(false);
+    }
   }
-  return <div className="auth-page"><div className="auth-left"><div className="auth-brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>agricloud<span className="brand-ai">.ai</span></span></div><div className="auth-content"><div className="hero-kicker"><span className="live-dot" /> FARM INTELLIGENCE FOR UGANDA</div><h1>A better season<br />starts with <em>insight.</em></h1><p>Bring climate context, your farm records, and trusted local knowledge together in one place.</p><div className="auth-points"><span><Check size={15} /> NASA POWER climate observations</span><span><Check size={15} /> Transparent planting guidance</span><span><Check size={15} /> Your farm information, securely scoped</span></div></div><div className="auth-footer">Built for farmers and agricultural extension teams in Uganda.</div></div><div className="auth-right"><div className="auth-form-wrap"><div className="auth-form-eyebrow">{registering ? "CREATE YOUR ACCOUNT" : "WELCOME BACK"}</div><h2>{registering ? "Start your workspace" : "Sign in to AgriCloud"}</h2><p>{registering ? "Create an account to register your farms and explore local climate context." : "Enter your credentials to continue to your farm dashboard."}</p>{message && <InlineNotice message={message} />}<form onSubmit={submit}>{registering && <><label>First name<input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} placeholder="First name" /></label><label>Last name<input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} placeholder="Last name" /></label><label>Email address<input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label><label>District <span className="optional">(optional)</span><input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} placeholder="e.g. Wakiso" /></label></>}<label>Username<input autoComplete="username" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Your username" /></label><label>Password<input autoComplete={registering ? "new-password" : "current-password"} minLength={registering ? 10 : undefined} type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={registering ? "At least 10 characters" : "Enter your password"} /></label><button className="button button-primary auth-submit" disabled={busy}>{busy ? "Please wait…" : registering ? "Create account" : "Sign in"} <ChevronRight size={16} /></button></form><div className="auth-switch">{registering ? "Already have an account?" : "New to AgriCloud?"} <button onClick={() => { setRegistering(!registering); setMessage(""); }}>{registering ? "Sign in" : "Create account"}</button></div><div className="auth-secure"><ShieldAlert size={13} /> New registrations receive the farmer role. Staff roles are assigned by administrators.</div></div></div></div>;
+
+  const eyebrow = mode === "register" ? "CREATE YOUR ACCOUNT" : mode === "forgot" ? "ACCOUNT RECOVERY" : mode === "reset" ? "SET NEW PASSWORD" : "WELCOME BACK";
+  const heading = mode === "register" ? "Start your workspace" : mode === "forgot" ? "Reset your password" : mode === "reset" ? "Choose a new password" : "Sign in to AgriCloud";
+  const subtext = mode === "register" ? "Create an account to register your farms and explore local climate context."
+    : mode === "forgot" ? "Enter your registered email address and we'll send you a reset link."
+    : mode === "reset" ? "Enter a new password for your account. It must be at least 10 characters."
+    : "Enter your credentials to continue to your farm dashboard.";
+
+  return (
+    <div className="auth-page">
+      <div className="auth-left">
+        <div className="auth-brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>agricloud<span className="brand-ai">.ai</span></span></div>
+        <div className="auth-content">
+          <div className="hero-kicker"><span className="live-dot" /> FARM INTELLIGENCE FOR UGANDA</div>
+          <h1>A better season<br />starts with <em>insight.</em></h1>
+          <p>Bring climate context, your farm records, and trusted local knowledge together in one place.</p>
+          <div className="auth-points">
+            <span><Check size={15} /> NASA POWER climate observations</span>
+            <span><Check size={15} /> Transparent planting guidance</span>
+            <span><Check size={15} /> Your farm information, securely scoped</span>
+          </div>
+        </div>
+        <div className="auth-footer">Built for farmers and agricultural extension teams in Uganda.</div>
+      </div>
+
+      <div className="auth-right">
+        <div className="auth-form-wrap">
+          <div className="auth-form-eyebrow">{eyebrow}</div>
+          <h2>{heading}</h2>
+          <p>{subtext}</p>
+
+          {message && <InlineNotice message={message} />}
+          {successMessage && <div className="inline-notice inline-notice-success"><Check size={15} />{successMessage}</div>}
+
+          {!successMessage && (
+            <form onSubmit={submit}>
+              {mode === "register" && (
+                <>
+                  <label>First name<input required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} placeholder="First name" /></label>
+                  <label>Last name<input required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} placeholder="Last name" /></label>
+                  <label>Email address<input required type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label>
+                  <label>District <span className="optional">(optional)</span><input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} placeholder="e.g. Wakiso" /></label>
+                </>
+              )}
+
+              {mode === "forgot" && (
+                <label>Email address<input required type="email" autoComplete="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="you@example.com" /></label>
+              )}
+
+              {mode === "reset" && (
+                <>
+                  <label>New password<input required type="password" autoComplete="new-password" minLength={10} value={form.newPassword} onChange={(e) => setForm({ ...form, newPassword: e.target.value })} placeholder="At least 10 characters" /></label>
+                  <label>Confirm password<input required type="password" autoComplete="new-password" minLength={10} value={form.confirmPassword} onChange={(e) => setForm({ ...form, confirmPassword: e.target.value })} placeholder="Repeat your new password" /></label>
+                </>
+              )}
+
+              {(mode === "signin" || mode === "register") && (
+                <>
+                  <label>Username<input autoComplete="username" required value={form.username} onChange={(e) => setForm({ ...form, username: e.target.value })} placeholder="Your username" /></label>
+                  <label>
+                    Password
+                    <input autoComplete={mode === "register" ? "new-password" : "current-password"} minLength={mode === "register" ? 10 : undefined} type="password" required value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder={mode === "register" ? "At least 10 characters" : "Enter your password"} />
+                  </label>
+                  {mode === "signin" && (
+                    <div className="auth-forgot-row">
+                      <button type="button" className="auth-link" onClick={() => { setMode("forgot"); setMessage(""); setSuccessMessage(""); }}>Forgot password?</button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              <button className="button button-primary auth-submit" disabled={busy}>
+                {busy ? "Please wait…" : mode === "register" ? "Create account" : mode === "forgot" ? "Send reset link" : mode === "reset" ? "Set new password" : "Sign in"} <ChevronRight size={16} />
+              </button>
+            </form>
+          )}
+
+          {mode !== "reset" && (
+            <div className="auth-switch">
+              {mode === "forgot" ? (
+                <>Remember your password? <button className="auth-link" onClick={() => { setMode("signin"); setMessage(""); setSuccessMessage(""); }}>Sign in</button></>
+              ) : mode === "register" ? (
+                <>Already have an account? <button className="auth-link" onClick={() => { setMode("signin"); setMessage(""); setSuccessMessage(""); }}>Sign in</button></>
+              ) : (
+                <>New to AgriCloud? <button className="auth-link" onClick={() => { setMode("register"); setMessage(""); setSuccessMessage(""); }}>Create account</button></>
+              )}
+            </div>
+          )}
+
+          <div className="auth-secure"><ShieldAlert size={13} /> New registrations receive the farmer role. Staff roles are assigned by administrators.</div>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function initials(user: User) { return `${user.first_name?.[0] ?? user.username[0] ?? "A"}${user.last_name?.[0] ?? ""}`.toUpperCase(); }

@@ -2,8 +2,8 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    CropViewSet, FarmQuestionViewSet, FarmViewSet, MeView, RegisterView, analytics, extension_overview, health,
-    assistant_chat, climate_risks, logout, mark_notification_read, notifications, recommendation_list, recommendations, weather,
+    CropViewSet, FarmQuestionViewSet, FarmViewSet, MeView, ProfileImageView, RegisterView, analytics, extension_overview, health,
+    assistant_chat, climate_risks, current_weather, CropDiseaseView, harvest_records, irrigation, logout, market_intelligence, mark_notification_read, notifications, password_reset_confirm, password_reset_request, recommendation_list, recommendations, weather, yield_forecast,
 )
 
 router = DefaultRouter()
@@ -15,8 +15,17 @@ urlpatterns = [
     path("health/", health),
     path("auth/register/", RegisterView.as_view(), name="register"),
     path("auth/me/", MeView.as_view(), name="me"),
+    path("auth/me/profile-image/", ProfileImageView.as_view(), name="profile-image"),
     path("auth/logout/", logout, name="logout"),
+    path("auth/password-reset/", password_reset_request, name="password-reset-request"),
+    path("auth/password-reset/confirm/", password_reset_confirm, name="password-reset-confirm"),
     path("weather/", weather, name="weather"),
+    path("weather/current/", current_weather, name="current-weather"),
+    path("crop-disease/", CropDiseaseView.as_view(), name="crop-disease"),
+    path("irrigation/", irrigation, name="irrigation"),
+    path("yield-forecast/", yield_forecast, name="yield-forecast"),
+    path("harvests/", harvest_records, name="harvest-records"),
+    path("market-intelligence/", market_intelligence, name="market-intelligence"),
     path("recommendations/", recommendations, name="recommendations"),
     path("recommendations/list/", recommendation_list, name="recommendation-list"),
     path("notifications/", notifications, name="notifications"),

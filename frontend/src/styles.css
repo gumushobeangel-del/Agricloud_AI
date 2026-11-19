@@ -421,9 +421,12 @@ select option { color: #e0ece2; background: #10251e; }
 .auth-form-wrap input { min-height: 40px; }
 .auth-submit { width: 100%; justify-content: space-between; margin-top: 4px; }
 .auth-switch { padding-top: 18px; text-align: center; color: #81968a; font-size: 9px; }
-.auth-switch button { padding: 0 0 0 4px; border: 0; color: #62d99e; background: transparent; font-size: 9px; font-weight: 600; }
+.auth-switch button, .auth-link { padding: 0 0 0 4px; border: 0; color: #62d99e; background: transparent; font-size: 9px; font-weight: 600; cursor: pointer; }
+.auth-forgot-row { display: flex; justify-content: flex-end; margin-top: -4px; }
+.auth-forgot-row .auth-link { font-size: 9px; padding: 0; }
 .auth-secure { display: flex; align-items: flex-start; gap: 6px; margin-top: 25px; color: #70867a; font-size: 8px; line-height: 1.5; }
 .auth-secure svg { flex: 0 0 13px; color: #c4a351; }
+.inline-notice-success { background: #0d2f1f; border-color: #2cde9144; color: #74d8a1; }
 .boot-screen { min-height: 100vh; display: flex; align-items: center; justify-content: center; gap: 12px; color: #9eb3a4; background: #071915; font-size: 11px; }
 .boot-screen .brand-mark { width: 33px; height: 33px; }
 .mobile-backdrop { display: none; }
