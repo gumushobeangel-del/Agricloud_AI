@@ -1,21 +1,25 @@
-import { FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Activity, Bell, Check, ChevronDown, ChevronRight, LogOut, Pencil,
-  CloudSun, Droplets, Ellipsis, Leaf, MapPin, Menu, Plus, Search, ShieldAlert,
+  Activity, BarChart3, Bell, Bug, CalendarDays, Check, ChevronDown, ChevronRight, LogOut, Pencil,
+  CloudSun, Droplets, Ellipsis, Leaf, MapPin, Menu, Plus, Search, ShieldAlert, Store, Upload, Wind,
   MessageCircleQuestion, Sprout, Sun, Thermometer, Tractor, TrendingUp, X,
 } from "lucide-react";
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
-import { api, ApiError, Farm, FarmQuestion, NotificationItem, Recommendation, User, Weather } from "./api";
+import { api, ApiError, CropDiseaseResult, Farm, FarmQuestion, HarvestRecord, IrrigationPlan, LiveWeather, MarketIntelligence, MarketPrice, NotificationItem, Recommendation, User, Weather, YieldForecast } from "./api";
 
-type Page = "overview" | "farms" | "weather" | "advisor" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
+type Page = "overview" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
 const mainLinks: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "overview", label: "Dashboard", icon: Activity },
   { id: "farms", label: "Crop management", icon: Tractor },
   { id: "weather", label: "Weather", icon: CloudSun },
   { id: "advisor", label: "Planting advisor", icon: Sprout },
+  { id: "disease", label: "Crop disease check", icon: Bug },
+  { id: "irrigation", label: "Smart irrigation", icon: Droplets },
+  { id: "yield", label: "Yield forecast", icon: BarChart3 },
+  { id: "markets", label: "Market intelligence", icon: Store },
   { id: "map", label: "Field monitoring", icon: MapPin },
   { id: "assistant", label: "AI assistant", icon: Ellipsis },
   { id: "questions", label: "Farmer questions", icon: MessageCircleQuestion },
@@ -24,6 +28,8 @@ const mainLinks: { id: Page; label: string; icon: typeof Activity }[] = [
 ];
 const pageTitles: Record<Page, string> = {
   overview: "Overview", farms: "My farms", weather: "Weather intelligence", advisor: "Planting advisor",
+  disease: "Crop disease detection", irrigation: "Smart irrigation",
+  yield: "Crop yield forecast", markets: "Market intelligence",
   map: "Farm map", assistant: "AI farming assistant", questions: "Farmer questions", alerts: "Climate risk alerts",
   analytics: "Farm analytics", profile: "Profile settings",
 };
@@ -41,12 +47,17 @@ function App() {
       const current = await api<User>("/auth/me/");
       setUser(current);
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        localStorage.removeItem("agri_access");
-        localStorage.removeItem("agri_refresh");
-      }
+      // Always clear stale tokens on any auth or server error.
+      localStorage.removeItem("agri_access");
+      localStorage.removeItem("agri_refresh");
       setUser(null);
-      setAuthError(error instanceof Error ? error.message : "Unable to load your account.");
+      // Only surface a message for server errors. A 401 just means the session
+      // expired — the user will sign in again without seeing a confusing error.
+      if (error instanceof ApiError && error.status >= 500) {
+        setAuthError("The server is temporarily unavailable. Please try signing in again.");
+      } else {
+        setAuthError("");
+      }
       setBooting(false);
       return;
     }
@@ -71,6 +82,7 @@ function App() {
   const refreshFarms = async () => setFarms(await api<Farm[]>("/farms/"));
 
   async function signIn(username: string, password: string) {
+    setAuthError("");
     const tokens = await api<{ access: string; refresh: string }>("/auth/token/", {
       method: "POST", body: JSON.stringify({ username, password }),
     });
@@ -119,20 +131,24 @@ function App() {
         </nav>
         <div className="sidebar-bottom">
           <div className="season-card"><div className="season-icon"><Sun size={16} /></div><div><strong>Season watch</strong><span>Local climate context</span></div><ChevronRight size={15} /></div>
-          <button className={`nav-item ${page === "profile" ? "active" : ""}`} onClick={() => setPage("profile")}><div className="avatar">{initials(user)}</div><span className="profile-label"><strong>{user.first_name || user.username}</strong><small>Settings · {roleLabel(user.role)}</small></span><ChevronDown size={14} /></button>
+          <button className={`nav-item ${page === "profile" ? "active" : ""}`} onClick={() => setPage("profile")}><UserAvatar user={user} className="avatar" /><span className="profile-label"><strong>{user.first_name || user.username}</strong><small>Settings · {roleLabel(user.role)}</small></span><ChevronDown size={14} /></button>
         </div>
       </aside>
       <main className="main-shell">
         <header className="topbar">
           <button className="icon-btn mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={19} /></button>
           <div className="breadcrumbs"><span>Workspace</span><ChevronRight size={13} /><strong>{pageTitles[page]}</strong></div>
-          <div className="topbar-actions"><div className="searchbox"><Search size={16} /><input placeholder="Search farms, crops..." aria-label="Search" /><kbd>⌘ K</kbd></div><button className="icon-btn notification-btn" aria-label="Notifications" onClick={() => setPage("alerts")}><Bell size={18} /></button><button className="top-add-farm" onClick={() => setPage("farms")} aria-label="Open farm management"><Plus size={16} /><span>Add farm</span></button><button className="user-chip" onClick={() => setPage("profile")} aria-label="Open profile settings"><span className="top-avatar">{initials(user)}</span><span className="user-chip-copy"><strong>{user.first_name || user.username}</strong><small>{roleLabel(user.role)}</small></span><ChevronDown size={13} /></button><button className="icon-btn logout-btn" aria-label="Sign out" title="Sign out" onClick={() => void signOut()}><LogOut size={16} /></button></div>
+          <div className="topbar-actions"><div className="searchbox"><Search size={16} /><input placeholder="Search farms, crops..." aria-label="Search" /><kbd>⌘ K</kbd></div><button className="icon-btn notification-btn" aria-label="Notifications" onClick={() => setPage("alerts")}><Bell size={18} /></button><button className="top-add-farm" onClick={() => setPage("farms")} aria-label="Open farm management"><Plus size={16} /><span>Add farm</span></button><button className="user-chip" onClick={() => setPage("profile")} aria-label="Open profile settings"><UserAvatar user={user} className="top-avatar" /><span className="user-chip-copy"><strong>{user.first_name || user.username}</strong><small>{roleLabel(user.role)}</small></span><ChevronDown size={13} /></button><button className="icon-btn logout-btn" aria-label="Sign out" title="Sign out" onClick={() => void signOut()}><LogOut size={16} /></button></div>
         </header>
         <div className="content">
           {page === "overview" && <Dashboard user={user} farms={farms} go={setPage} />}
           {page === "farms" && <FarmsPage farms={farms} refresh={refreshFarms} readOnly={user.role === "extension"} />}
           {page === "weather" && <WeatherPage farms={farms} />}
           {page === "advisor" && <AdvisorPage farms={farms} />}
+          {page === "disease" && <CropDiseasePage />}
+          {page === "irrigation" && <IrrigationPage farms={farms} />}
+          {page === "yield" && <YieldPage farms={farms} user={user} />}
+          {page === "markets" && <MarketPage />}
           {page === "map" && <MapPage farms={farms} />}
           {page === "assistant" && <AssistantPage user={user} farms={farms} onAskExtension={() => setPage("questions")} />}
           {page === "questions" && <QuestionsPage user={user} farms={farms} />}
@@ -157,6 +173,8 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow?: string
 function Dashboard({ user, farms, go }: { user: User; farms: Farm[]; go: (page: Page) => void }) {
   const [weather, setWeather] = useState<Weather | null>(null);
   const [weatherError, setWeatherError] = useState("");
+  const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
+  const [liveWeatherError, setLiveWeatherError] = useState("");
   const [analytics, setAnalytics] = useState<{ farm_count: number; total_hectares: number; crop_distribution: { crop: string; count: number }[] } | null>(null);
   const [recentRecommendation, setRecentRecommendation] = useState<Recommendation | null>(null);
   const [loading, setLoading] = useState(true);
@@ -167,7 +185,8 @@ function Dashboard({ user, farms, go }: { user: User; farms: Farm[]; go: (page: 
       api<NonNullable<typeof analytics>>("/analytics/"),
       farms.length ? api<Weather>(`/weather/?farm_id=${farms[0].id}`) : Promise.resolve(null),
       api<Recommendation[]>("/recommendations/list/"),
-    ]).then(([statsResult, weatherResult, recommendationsResult]) => {
+      farms.length ? api<LiveWeather>(`/weather/current/?farm_id=${farms[0].id}`) : Promise.resolve(null),
+    ]).then(([statsResult, weatherResult, recommendationsResult, liveWeatherResult]) => {
       if (!active) return;
       if (statsResult.status === "fulfilled") setAnalytics(statsResult.value);
       if (weatherResult.status === "fulfilled") {
@@ -175,11 +194,28 @@ function Dashboard({ user, farms, go }: { user: User; farms: Farm[]; go: (page: 
         if (weatherResult.value) setWeatherError("");
       } else setWeatherError(weatherResult.reason instanceof Error ? weatherResult.reason.message : "Could not load climate observations.");
       if (recommendationsResult.status === "fulfilled") setRecentRecommendation(recommendationsResult.value[0] ?? null);
+      if (liveWeatherResult.status === "fulfilled") {
+        setLiveWeather(liveWeatherResult.value);
+        setLiveWeatherError("");
+      } else {
+        setLiveWeather(null);
+        setLiveWeatherError(liveWeatherResult.reason instanceof Error ? liveWeatherResult.reason.message : "Could not load current weather.");
+      }
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
   }, [farms]);
+  useEffect(() => {
+    if (!farms.length) return;
+    const interval = window.setInterval(() => {
+      api<LiveWeather>(`/weather/current/?farm_id=${farms[0].id}`)
+        .then((data) => { setLiveWeather(data); setLiveWeatherError(""); })
+        .catch((err: Error) => setLiveWeatherError(err.message));
+    }, 15 * 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [farms]);
   const latestObservation = weather?.observations.at(-1);
   const latest = latestObservation?.values;
+  const current = liveWeather?.current;
   const rainfallValues = weather?.observations
     .map((day) => day.values.PRECTOTCORR?.value)
     .filter((value): value is number => value !== undefined && Number.isFinite(value)) ?? [];
@@ -252,14 +288,17 @@ function Dashboard({ user, farms, go }: { user: User; farms: Farm[]; go: (page: 
 
       <div className="dashboard-right-stack">
         <section className="panel dashboard-weather-panel">
-          <div className="panel-heading"><div><h3>Latest climate</h3><p>{latestObservation ? `Observed ${latestObservation.date}` : "Historical data for your farm"}</p></div><CloudSun size={17} className="panel-heading-icon" /></div>
-          {weatherError && <InlineNotice message={weatherError} />}
-          <div className="weather-reading-grid">
-            <div className="weather-reading weather-temperature"><Thermometer size={15} /><span>Temperature</span><strong>{latest?.T2M ? `${latest.T2M.value.toFixed(1)}°C` : "—"}</strong></div>
-            <div className="weather-reading"><Droplets size={15} /><span>Rainfall</span><strong>{latest?.PRECTOTCORR ? `${latest.PRECTOTCORR.value.toFixed(1)} mm` : "—"}</strong></div>
-            <div className="weather-reading"><Activity size={15} /><span>Humidity</span><strong>{latest?.RH2M ? `${latest.RH2M.value.toFixed(0)}%` : "—"}</strong></div>
-          </div>
-          <div className="dashboard-data-note"><span className="source-dot" /> {weather?.source || "NASA POWER"} · historical observations</div>
+          <div className="panel-heading"><div><h3>Current weather</h3><p>{current ? `${current.condition} · ${liveWeather?.farm.district}` : "Model-based conditions at your farm"}</p></div><CloudSun size={17} className="panel-heading-icon" /></div>
+          {liveWeatherError && <InlineNotice message={liveWeatherError} />}
+          {current ? <>
+            <div className="weather-reading-grid dashboard-live-grid">
+              <div className="weather-reading weather-temperature"><Thermometer size={15} /><span>Temperature</span><strong>{current.temperature_c === null ? "—" : `${current.temperature_c.toFixed(1)}°C`}</strong></div>
+              <div className="weather-reading"><Droplets size={15} /><span>Precipitation</span><strong>{current.precipitation_mm === null ? "—" : `${current.precipitation_mm.toFixed(1)} mm`}</strong></div>
+              <div className="weather-reading"><Activity size={15} /><span>Humidity</span><strong>{current.relative_humidity_pct === null ? "—" : `${current.relative_humidity_pct.toFixed(0)}%`}</strong></div>
+              <div className="weather-reading"><Wind size={15} /><span>Wind</span><strong>{current.wind_speed_kmh === null ? "—" : `${current.wind_speed_kmh.toFixed(0)} km/h`}</strong></div>
+            </div>
+            <div className="dashboard-data-note">Modelled conditions · refreshes every 15 minutes · {current.time.replace("T", " ")} local time · <a href={liveWeather.attribution_url} target="_blank" rel="noreferrer">Open-Meteo</a></div>
+          </> : !liveWeatherError && <div className="live-weather-empty">{loading ? "Loading current conditions…" : farms.length ? "Current weather is not available right now." : "Add a farm to see local weather."}</div>}
         </section>
 
         <section className="panel dashboard-soil-panel">
@@ -275,6 +314,7 @@ function Dashboard({ user, farms, go }: { user: User; farms: Farm[]; go: (page: 
 
       <section className="panel dashboard-trend-panel">
         <div className="panel-heading"><div><h3>Climate trend</h3><p>{weather ? `${weather.period.start} – ${weather.period.end} · historical observations` : "Rainfall and temperature at your farm"}</p></div><button className="subtle-button" onClick={() => go("weather")}>Details <ChevronRight size={13} /></button></div>
+        {weatherError && <InlineNotice message={weatherError} />}
         {chartData.length ? <ClimateChart data={chartData} /> : <EmptyState loading={loading} title={farms.length ? "Climate data unavailable" : "No observations yet"} text={farms.length ? "Historical observations could not be loaded. Try the weather page again." : "Add a farm to retrieve location-specific NASA POWER observations."} />}
         <div className="chart-legend"><span><i className="legend-rain" /> Rainfall <small>mm/day</small></span><span><i className="legend-temp" /> Temperature <small>°C</small></span><span className="source-label"><span className="source-dot" /> Observed · not forecast</span></div>
         {rainfall !== null && <div className="trend-total">Rainfall total in period <strong>{rainfall.toFixed(1)} mm</strong></div>}
@@ -364,10 +404,10 @@ function FarmsPage({ farms, refresh, readOnly }: { farms: Farm[]; refresh: () =>
       <label>District<input required maxLength={100} value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} placeholder="e.g. Wakiso" /></label>
       <label>Main crop<input value={form.crop} maxLength={100} onChange={(e) => setForm({ ...form, crop: e.target.value })} placeholder="e.g. Maize" /></label>
       <label>Size (hectares)<input required type="number" min="0.01" step="0.01" value={form.size_hectares} onChange={(e) => setForm({ ...form, size_hectares: e.target.value })} placeholder="1.5" /></label>
-      <label>Latitude<input required type="number" min="-90" max="90" step="any" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} placeholder="0.3476" /></label>
-      <label>Longitude<input required type="number" min="-180" max="180" step="any" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} placeholder="32.5825" /></label>
+      <label>Latitude<input required type="number" min="-1.5" max="4.2" step="any" value={form.latitude} onChange={(e) => setForm({ ...form, latitude: e.target.value })} placeholder="e.g. 0.3476  (Uganda: -1.5 to 4.2)" title="Uganda latitude range: -1.5 (south) to 4.2 (north)" /></label>
+      <label>Longitude<input required type="number" min="29.5" max="35.1" step="any" value={form.longitude} onChange={(e) => setForm({ ...form, longitude: e.target.value })} placeholder="e.g. 32.5825  (Uganda: 29.5 to 35.1)" title="Uganda longitude range: 29.5 (west) to 35.1 (east)" /></label>
       <label>Soil type<select value={form.soil_type} onChange={(e) => setForm({ ...form, soil_type: e.target.value })}><option value="unknown">Not specified</option><option value="clay">Clay</option><option value="loam">Loam</option><option value="sandy">Sandy</option><option value="volcanic">Volcanic</option></select></label>
-    </div><div className="form-actions"><span>Coordinates are stored with your private farm record.</span><button className="button button-primary" disabled={busy}>{busy ? "Saving…" : editingId ? "Save changes" : "Save farm"}</button></div></form>}
+    </div><div className="form-actions"><span>Coordinates must be within Uganda (Lat: -1.5 to 4.2, Lon: 29.5 to 35.1). Get them from Google Maps by right-clicking your farm location.</span><button className="button button-primary" disabled={busy}>{busy ? "Saving…" : editingId ? "Save changes" : "Save farm"}</button></div></form>}
     <div className="section-title-row"><div><h2>Registered locations</h2><p>{farms.length} farm{farms.length === 1 ? "" : "s"} in your workspace</p></div></div>
     {farms.length ? <div className="farm-card-grid">{farms.map((farm, index) => <article className="farm-card" key={farm.id}><div className={`farm-card-art art-${index % 3}`}><span className="art-chip"><MapPin size={13} /> {farm.district}</span><span className="art-orbit"><Leaf size={23} /></span></div><div className="farm-card-body"><div className="farm-card-top"><div><h3>{farm.name}</h3><p>{farm.crop || "No crop recorded"} · {farm.soil_type}</p>{readOnly && <p>Farmer: {farm.owner_name || "Name not provided"}</p>}</div>{!readOnly && <div className="farm-actions"><button className="delete-btn" onClick={() => edit(farm)} aria-label={`Edit ${farm.name}`}><Pencil size={14} /></button><button className="delete-btn" onClick={() => void remove(farm)} aria-label={`Delete ${farm.name}`}><X size={16} /></button></div>}</div><div className="farm-card-meta"><span><Sprout size={14} /> {farm.size_hectares} ha</span><span><MapPin size={14} /> {Number(farm.latitude).toFixed(3)}, {Number(farm.longitude).toFixed(3)}</span></div><div className="farm-card-footer"><span><span className="live-dot" /> Location saved</span><span>NASA POWER ready</span></div></div></article>)}</div> : <div className="panel large-empty"><EmptyState title={readOnly ? "No farmer farms registered" : "Your farm register is empty"} text={readOnly ? "Registered farms will be available for climate monitoring when farmers create records." : "Add a farm with its location to start exploring climate conditions and planting guidance."} action={!readOnly && <button className="button button-primary" onClick={() => setAdding(true)}><Plus size={15} /> Add your first farm</button>} /></div>}
   </>;
@@ -379,7 +419,24 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [period, setPeriod] = useState(30);
+  const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
+  const [liveLoading, setLiveLoading] = useState(false);
+  const [liveError, setLiveError] = useState("");
   useEffect(() => { if (!selectedId && farms.length) setSelectedId(farms[0].id); }, [farms, selectedId]);
+  async function loadLiveWeather() {
+    if (!selectedId) return;
+    setLiveLoading(true); setLiveError("");
+    try { setLiveWeather(await api<LiveWeather>(`/weather/current/?farm_id=${selectedId}`)); }
+    catch (err) { setLiveError(err instanceof Error ? err.message : "Could not load current weather."); }
+    finally { setLiveLoading(false); }
+  }
+  useEffect(() => {
+    if (!selectedId) { setLiveWeather(null); return; }
+    setLiveWeather(null);
+    void loadLiveWeather();
+    const interval = window.setInterval(() => void loadLiveWeather(), 15 * 60 * 1000);
+    return () => window.clearInterval(interval);
+  }, [selectedId]);
   async function load() {
     if (!selectedId) return;
     setLoading(true); setError("");
@@ -392,8 +449,30 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
   }
   useEffect(() => { if (selectedId) void load(); }, [selectedId, period]);
   const chartData = useMemo(() => weather?.observations.map((day) => ({ date: day.date.slice(5), rain: day.values.PRECTOTCORR?.value ?? null, temp: day.values.T2M?.value ?? null })) ?? [], [weather]);
+  const selectedFarm = farms.find((farm) => farm.id === Number(selectedId));
   return <>
-    <PageHeading eyebrow="NASA POWER · HISTORICAL DATA" title="Weather intelligence" description="Explore daily climate observations at your registered farm coordinates." action={<div className="weather-controls"><select aria-label="Select farm" value={selectedId} onChange={(e) => setSelectedId(Number(e.target.value))}>{farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name} · {farm.district}</option>)}</select><select aria-label="Observation period" value={period} onChange={(e) => setPeriod(Number(e.target.value))}><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select></div>} />
+    <PageHeading eyebrow="LIVE CONDITIONS · HISTORICAL DATA" title="Weather intelligence" description="See current model-based weather and a 7-day forecast separately from NASA POWER historical observations." action={<div className="weather-controls"><select aria-label="Select farm" value={selectedId} onChange={(e) => setSelectedId(Number(e.target.value))}>{farms.map((farm) => <option key={farm.id} value={farm.id}>{farm.name} · {farm.district}</option>)}</select><select aria-label="Observation period" value={period} onChange={(e) => setPeriod(Number(e.target.value))}><option value={30}>Last 30 days</option><option value={90}>Last 90 days</option><option value={365}>Last year</option></select></div>} />
+    {farms.length > 0 && <section className="panel current-weather-panel">
+      <div className="panel-heading">
+        <div><div className="eyebrow">CURRENT CONDITIONS · MODEL ESTIMATE</div><h3>{selectedFarm?.name || "Selected farm"} · {selectedFarm?.district || "Uganda"}</h3><p>{liveWeather ? `Updated ${liveWeather.current.time.replace("T", " ")} · ${liveWeather.timezone}` : "Weather conditions and seven-day outlook"}</p></div>
+        <button className="button button-secondary button-small" disabled={liveLoading} onClick={() => void loadLiveWeather()}>{liveLoading ? "Refreshing…" : "Refresh current weather"}</button>
+      </div>
+      {liveError && <InlineNotice message={liveError} />}
+      {liveWeather ? <>
+        <div className="current-weather-overview">
+          <div className="current-weather-summary"><span className="current-weather-icon"><CloudSun size={24} /></span><div><span>Current temperature</span><strong>{liveWeather.current.temperature_c === null ? "—" : `${liveWeather.current.temperature_c.toFixed(1)}°C`}</strong><p>{liveWeather.current.condition}{liveWeather.current.feels_like_c === null ? "" : ` · Feels like ${liveWeather.current.feels_like_c.toFixed(1)}°C`}</p></div></div>
+          <div className="current-weather-stats">
+            <div className="current-weather-stat"><Activity size={15} /><span>Humidity</span><strong>{liveWeather.current.relative_humidity_pct === null ? "—" : `${liveWeather.current.relative_humidity_pct.toFixed(0)}%`}</strong></div>
+            <div className="current-weather-stat"><Droplets size={15} /><span>Precipitation</span><strong>{liveWeather.current.precipitation_mm === null ? "—" : `${liveWeather.current.precipitation_mm.toFixed(1)} mm`}</strong></div>
+            <div className="current-weather-stat"><Wind size={15} /><span>Wind speed</span><strong>{liveWeather.current.wind_speed_kmh === null ? "—" : `${liveWeather.current.wind_speed_kmh.toFixed(0)} km/h`}</strong></div>
+            <div className="current-weather-stat"><CloudSun size={15} /><span>Cloud cover</span><strong>{liveWeather.current.cloud_cover_pct === null ? "—" : `${liveWeather.current.cloud_cover_pct.toFixed(0)}%`}</strong></div>
+          </div>
+        </div>
+        <div className="forecast-heading"><h4>7-day forecast</h4><span>Daily model forecast · local farm time</span></div>
+        <div className="forecast-grid">{liveWeather.daily_forecast.map((day) => <article className="forecast-day" key={day.date}><strong>{forecastDayLabel(day.date)}</strong><span>{day.condition}</span><div className="forecast-temperatures"><b>{day.temperature_max_c === null ? "—" : `${day.temperature_max_c.toFixed(0)}°`}</b><small>{day.temperature_min_c === null ? "—" : `${day.temperature_min_c.toFixed(0)}°`}</small></div><small>Rain chance {day.precipitation_probability_max_pct === null ? "—" : `${day.precipitation_probability_max_pct.toFixed(0)}%`}</small><small>{day.precipitation_sum_mm === null ? "—" : `${day.precipitation_sum_mm.toFixed(1)} mm`} rain</small></article>)}</div>
+        <div className="current-weather-note">Current conditions are model estimates, not readings from a local weather station. Farm coordinates are sent to Open-Meteo to retrieve this data. <a href={liveWeather.attribution_url} target="_blank" rel="noreferrer">Weather data by Open-Meteo</a>.</div>
+      </> : !liveError && <div className="live-weather-empty">{liveLoading ? "Loading current conditions and forecast…" : "Current weather is not available right now."}</div>}
+    </section>}
     <div className="data-banner"><span className="source-dot" /><strong>Historical observations</strong><span>NASA POWER · Daily point data</span><span className="banner-separator">|</span><span>Not a forecast</span></div>
     {error && <InlineNotice message={error} />}
     {farms.length ? <><div className="panel climate-panel full-panel"><div className="panel-heading"><div><h3>Rainfall & air temperature</h3><p>{weather ? `${weather.period.start} to ${weather.period.end} · ${weather.observations.length} observation days` : "Waiting for climate observations"}</p></div><button className="button button-secondary button-small" disabled={loading} onClick={() => void load()}>{loading ? "Updating…" : "Refresh data"}</button></div>{chartData.length ? <ClimateChart data={chartData} /> : <EmptyState loading={loading} title="No observations loaded" text={error || "NASA POWER data will appear here when available."} />}{weather && <div className="chart-legend"><span><i className="legend-rain" /> Precipitation <small>mm/day</small></span><span><i className="legend-temp" /> Temperature <small>°C</small></span><span className="source-label">Source: NASA POWER</span></div>}</div><div className="data-notes"><div className="note-icon"><Activity size={18} /></div><div><strong>Understanding these observations</strong><p>POWER daily point values are gridded satellite and model-informed estimates for this location. They describe the selected historical period and should not be interpreted as a local station reading or forecast.</p></div></div></> : <div className="panel large-empty"><EmptyState title="Add a farm to explore weather" text="Climate data is requested for saved farm coordinates—no sample or simulated live readings are shown here." /></div>}
@@ -421,6 +500,125 @@ function AdvisorPage({ farms }: { farms: Farm[] }) {
   </>;
 }
 
+function CropDiseasePage() {
+  const [crop, setCrop] = useState("");
+  const [image, setImage] = useState<File | null>(null);
+  const [preview, setPreview] = useState("");
+  const [result, setResult] = useState<CropDiseaseResult | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!image) { setPreview(""); return; }
+    const url = URL.createObjectURL(image);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [image]);
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (!image) return;
+    setBusy(true); setError(""); setResult(null);
+    const data = new FormData();
+    data.append("crop", crop);
+    data.append("image", image);
+    try { setResult(await api<CropDiseaseResult>("/crop-disease/", { method: "POST", body: data })); }
+    catch (err) { setError(err instanceof Error ? err.message : "The crop image could not be analyzed."); }
+    finally { setBusy(false); }
+  }
+  return <>
+    <PageHeading eyebrow="COMPUTER VISION · ADVISORY" title="Crop disease detection" description="Upload a clear crop photo for an AI-assisted check of visible signs and cautious next steps." />
+    <div className="feature-layout">
+      <form className="panel feature-form" onSubmit={(event) => void submit(event)}>
+        <div className="form-heading-icon"><Bug size={19} /></div><h3>Check a crop image</h3>
+        <p>Photograph the affected leaf or plant in good light. Include only the crop in the frame where possible.</p>
+        <label>Crop name<input required maxLength={100} value={crop} onChange={(event) => setCrop(event.target.value)} placeholder="e.g. maize, beans, cassava" /></label>
+        <label className="upload-field">Crop image
+          <input required type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => { setImage(event.target.files?.[0] ?? null); setResult(null); setError(""); }} />
+          <span className="upload-prompt"><Upload size={18} /><strong>{image?.name || "Choose or take a crop photo"}</strong><small>JPEG, PNG or WebP · Up to 5 MB</small></span>
+        </label>
+        {preview && <img className="crop-image-preview" src={preview} alt="Selected crop for visual assessment" />}
+        {error && <InlineNotice message={error} />}
+        <button className="button button-primary full-button" disabled={busy || !image || !crop.trim()}>{busy ? <><span className="spinner small" /> Reviewing image…</> : <><Bug size={15} /> Analyze crop image</>}</button>
+        <div className="feature-privacy-note"><ShieldAlert size={14} /> Your image is sent to the AI provider configured by the service operator for analysis. It is not saved by AgriCloud.</div>
+      </form>
+      <div className="feature-result">
+        {result ? <article className="panel disease-result">
+          <div className="panel-heading"><div><div className="eyebrow">POSSIBLE VISUAL MATCH</div><h3>{result.possible_disease}</h3><p>{result.crop} · AI image assessment</p></div><Bug size={18} className="panel-heading-icon" /></div>
+          <div className="confidence-head"><span>Model-reported confidence</span><strong>{result.confidence_pct.toFixed(1)}%</strong></div>
+          <div className="confidence-meter" role="meter" aria-label="Model-reported confidence" aria-valuemin={0} aria-valuemax={100} aria-valuenow={result.confidence_pct}><i style={{ width: `${Math.min(100, Math.max(0, result.confidence_pct))}%` }} /></div>
+          <h4>{result.analysis_type === "classifier" ? "Classifier output" : "Visible signs reported"}</h4>
+          {result.visual_signs.length ? <ul className="basis-list">{result.visual_signs.map((sign, index) => <li key={index}><Check size={14} />{sign}</li>)}</ul> : <p className="feature-copy">{result.analysis_type === "classifier" ? "This classifier reports a class and score, not individual symptoms or lesions." : "No clear visual signs were returned."}</p>}
+          <div className="disease-advice"><section><h4>Suggested next steps</h4><p>{result.treatment}</p></section><section><h4>Prevention</h4><p>{result.prevention}</p></section></div>
+          <div className="advice-disclaimer">{result.disclaimer}</div>
+        </article> : <div className="panel feature-placeholder"><span className="placeholder-core"><Bug size={26} /></span><h3>Image-based crop check</h3><p>After analysis, possible conditions, confidence, visible signs, and general care recommendations will appear here.</p><div className="placeholder-list"><span><Check size={14} /> Confidence shown with uncertainty</span><span><Check size={14} /> Practical prevention suggestions</span><span><Check size={14} /> No pesticide rates or confirmed diagnosis</span></div></div>}
+      </div>
+    </div>
+  </>;
+}
+
+function IrrigationPage({ farms }: { farms: Farm[] }) {
+  const [farmId, setFarmId] = useState<number | "">(farms[0]?.id ?? "");
+  const [crop, setCrop] = useState(farms[0]?.crop ?? "");
+  const [stage, setStage] = useState("mid");
+  const [soilMoisture, setSoilMoisture] = useState("");
+  const [result, setResult] = useState<IrrigationPlan | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => {
+    if (!farmId && farms.length) {
+      setFarmId(farms[0].id);
+      setCrop(farms[0].crop);
+    }
+  }, [farmId, farms]);
+  async function submit(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setError(""); setResult(null);
+    try {
+      setResult(await api<IrrigationPlan>("/irrigation/", {
+        method: "POST",
+        body: JSON.stringify({
+          farm_id: farmId,
+          crop,
+          stage,
+          ...(soilMoisture === "" ? {} : { soil_moisture_pct: Number(soilMoisture) }),
+        }),
+      }));
+    } catch (err) { setError(err instanceof Error ? err.message : "The irrigation plan could not be calculated."); }
+    finally { setBusy(false); }
+  }
+  return <>
+    <PageHeading eyebrow="7-DAY WATER BALANCE · WEATHER MODEL" title="Smart irrigation" description="Estimate crop water demand and plan irrigation using your farm area, crop stage, and local weather forecast." />
+    <div className="advisor-layout irrigation-layout">
+      <form className="panel advisor-form" onSubmit={(event) => void submit(event)}>
+        <div className="form-heading-icon"><Droplets size={19} /></div><h3>Set field conditions</h3>
+        <p>Forecast-based water estimates are indicative; sensor readings and local advice take precedence.</p>
+        <label>Choose a farm<select required value={farmId} onChange={(event) => { const id = Number(event.target.value); setFarmId(id); setCrop(farms.find((farm) => farm.id === id)?.crop ?? ""); setResult(null); }}><option value="">Select a farm</option>{farms.map((farm) => <option value={farm.id} key={farm.id}>{farm.name} · {farm.district}</option>)}</select></label>
+        <label>Crop<input required maxLength={100} value={crop} onChange={(event) => setCrop(event.target.value)} placeholder="e.g. maize, beans, rice" /></label>
+        <label>Growth stage<select value={stage} onChange={(event) => setStage(event.target.value)}><option value="initial">Initial</option><option value="development">Development</option><option value="mid">Mid-season</option><option value="late">Late-season</option></select></label>
+        <label>Soil moisture <span className="optional">(optional farmer estimate, %)</span><input type="number" min="0" max="100" step="1" value={soilMoisture} onChange={(event) => setSoilMoisture(event.target.value)} placeholder="Not measured" /></label>
+        {error && <InlineNotice message={error} />}
+        <button className="button button-primary full-button" disabled={busy || !farms.length || !crop.trim()}>{busy ? <><span className="spinner small" /> Calculating forecast…</> : <><Droplets size={15} /> Calculate water plan</>}</button>
+        <small className="privacy-note"><ShieldAlert size={13} /> Weather estimates are not on-farm sensor measurements.</small>
+      </form>
+      <div className="feature-result">
+        {result ? <>
+          <div className="metric-grid irrigation-metrics">
+            <MetricCard icon={<Sun size={16} />} label="Crop water need" value={`${result.totals.crop_water_need_mm.toFixed(1)} mm`} note="7-day estimate · ETc" tone="lime" />
+            <MetricCard icon={<CloudSun size={16} />} label="Effective rainfall" value={`${result.totals.effective_rainfall_mm.toFixed(1)} mm`} note="Estimated from forecast rain" tone="blue" />
+            <MetricCard icon={<Droplets size={16} />} label="Net irrigation" value={`${result.totals.net_irrigation_need_mm.toFixed(1)} mm`} note={`${result.totals.net_irrigation_volume_liters.toLocaleString()} L for ${result.farm_area_hectares} ha`} tone="green" />
+          </div>
+          <section className="panel irrigation-result">
+            <div className="panel-heading"><div><div className="eyebrow">SUGGESTED SCHEDULE</div><h3>{result.crop} · {result.farm.name}</h3><p>Crop coefficient {result.crop_coefficient} · {result.stage} stage</p></div><CalendarDays size={18} className="panel-heading-icon" /></div>
+            {result.schedule.length ? <div className="irrigation-schedule">{result.schedule.map((item) => <article className="schedule-row" key={item.date}><span className="schedule-icon"><Droplets size={15} /></span><div><strong>{forecastDayLabel(item.date)}</strong><small>{item.depth_mm.toFixed(1)} mm net water</small></div><b>{item.volume_liters.toLocaleString()} L</b></article>)}</div> : <div className="schedule-empty">No irrigation trigger in the forecast window. Keep checking field conditions, especially if rainfall differs from the forecast.</div>}
+            <h4>Daily forecast balance</h4>
+            <div className="irrigation-days">{result.daily.map((day) => <div className="irrigation-day" key={day.date}><strong>{forecastDayLabel(day.date)}</strong><span>ETc {day.crop_water_need_mm.toFixed(1)} mm</span><span>Rain {day.rainfall_mm.toFixed(1)} mm</span><b>{day.net_irrigation_need_mm.toFixed(1)} mm net</b></div>)}</div>
+            {result.soil_moisture_note && <p className="soil-estimate-note">Entered soil moisture: {result.soil_moisture_pct}% · {result.soil_moisture_status} · {result.soil_moisture_note}</p>}
+            <div className="advice-disclaimer">{result.methodology} <a href="https://open-meteo.com/" target="_blank" rel="noreferrer">Weather data by Open-Meteo</a>.</div>
+          </section>
+        </> : farms.length ? <div className="panel feature-placeholder"><span className="placeholder-core"><Droplets size={26} /></span><h3>Forecast-led water planning</h3><p>Select a farm and crop to estimate reference evapotranspiration, crop demand, effective rainfall, and net water needs.</p><div className="placeholder-list"><span><Check size={14} /> Adjusted for crop and growth stage</span><span><Check size={14} /> Farm area translated to litres</span><span><Check size={14} /> Seven-day rainfall factored in</span></div></div> : <div className="panel feature-placeholder"><span className="placeholder-core"><Droplets size={26} /></span><h3>Add a farm to get started</h3><p>Farm coordinates, area, crop, and soil type are used to prepare a forecast-based irrigation guide.</p></div>}
+      </div>
+    </div>
+  </>;
+}
+
 function MapPage({ farms }: { farms: Farm[] }) {
   return <>
     <PageHeading eyebrow="OPENSTREETMAP" title="Farm map" description="See registered farm locations across Uganda. Map tiles are provided by OpenStreetMap." />
@@ -429,8 +627,15 @@ function MapPage({ farms }: { farms: Farm[] }) {
 }
 
 function FarmMap({ farms, compact = false }: { farms: Farm[]; compact?: boolean }) {
-  const center: [number, number] = farms.length ? [Number(farms[0].latitude), Number(farms[0].longitude)] : [1.3733, 32.2903];
-  return <MapContainer center={center} zoom={farms.length === 1 ? 10 : 7} scrollWheelZoom={!compact} className={`leaflet-map${compact ? " dashboard-leaflet-map" : ""}`}>
+  const validFarms = farms.filter((f) => {
+    const lat = Number(f.latitude), lon = Number(f.longitude);
+    return lat >= -1.5 && lat <= 4.2 && lon >= 29.5 && lon <= 35.1;
+  });
+  const displayFarms = validFarms.length > 0 ? validFarms : farms;
+  const center: [number, number] = displayFarms.length
+    ? [Number(displayFarms[0].latitude), Number(displayFarms[0].longitude)]
+    : [1.3733, 32.2903];
+  return <MapContainer center={center} zoom={displayFarms.length === 1 ? 12 : 7} scrollWheelZoom={!compact} className={`leaflet-map${compact ? " dashboard-leaflet-map" : ""}`}>
     <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
     {farms.map((farm) => <CircleMarker key={farm.id} center={[Number(farm.latitude), Number(farm.longitude)]} radius={9} pathOptions={{ color: "#09241d", fillColor: "#2cde91", fillOpacity: 0.9, weight: 3 }}><Popup><strong>{farm.name}</strong><br />{farm.district} · {farm.crop || "Crop unspecified"}<br />{farm.size_hectares} ha</Popup></CircleMarker>)}
   </MapContainer>;
@@ -589,6 +794,179 @@ function AlertsPage() {
   </>;
 }
 
+function YieldPage({ farms, user }: { farms: Farm[]; user: User }) {
+  const [farmId, setFarmId] = useState<number | "">(farms[0]?.id ?? "");
+  const [crop, setCrop] = useState(farms[0]?.crop ?? "");
+  const [forecast, setForecast] = useState<YieldForecast | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [harvestError, setHarvestError] = useState("");
+  const [harvestNotice, setHarvestNotice] = useState("");
+  const [harvestDate, setHarvestDate] = useState(new Date().toISOString().slice(0, 10));
+  const [quantity, setQuantity] = useState("");
+  const selectedFarm = farms.find((farm) => farm.id === Number(farmId));
+  const canRecordHarvest = user.role === "farmer" || user.role === "admin";
+
+  async function loadForecast(cropName = crop) {
+    if (!farmId || !cropName.trim()) return;
+    setLoading(true); setError("");
+    try {
+      const params = new URLSearchParams({ farm_id: String(farmId), crop: cropName.trim() });
+      setForecast(await api<YieldForecast>(`/yield-forecast/?${params.toString()}`));
+    } catch (err) {
+      setForecast(null);
+      setError(err instanceof Error ? err.message : "The yield estimate could not be loaded.");
+    } finally { setLoading(false); }
+  }
+  useEffect(() => { if (farmId && crop.trim()) void loadForecast(); }, [farmId]);
+
+  async function recordHarvest(event: FormEvent) {
+    event.preventDefault(); setBusy(true); setHarvestError(""); setHarvestNotice("");
+    try {
+      await api<HarvestRecord>("/harvests/", {
+        method: "POST",
+        body: JSON.stringify({ farm: farmId, crop: crop.trim(), harvest_date: harvestDate, quantity_kg: quantity }),
+      });
+      setQuantity("");
+      setHarvestNotice("Harvest record saved.");
+      await loadForecast();
+    } catch (err) { setHarvestError(err instanceof Error ? err.message : "Harvest record could not be saved."); }
+    finally { setBusy(false); }
+  }
+  const annualData = forecast?.harvest_trend ?? [];
+  const climate = forecast?.climate_context;
+  return <>
+    <PageHeading eyebrow="REFERENCE ESTIMATE · CLIMATE CONTEXT" title="Crop yield forecast" description="Estimate harvest from your farm's past production or a sourced yield benchmark, with recent climate risks shown separately." />
+    <form className="panel yield-controls" onSubmit={(event) => { event.preventDefault(); void loadForecast(); }}>
+      <label>Farm<select required value={farmId} onChange={(event) => { const id = Number(event.target.value); setFarmId(id); setCrop(farms.find((farm) => farm.id === id)?.crop ?? ""); setForecast(null); }}><option value="">Select a farm</option>{farms.map((farm) => <option value={farm.id} key={farm.id}>{farm.name} · {farm.district}</option>)}</select></label>
+      <label>Crop<input required maxLength={100} value={crop} onChange={(event) => setCrop(event.target.value)} placeholder="e.g. maize" /></label>
+      <button className="button button-primary" disabled={loading || !farmId || !crop.trim()}>{loading ? "Updating estimate…" : "Update forecast"}</button>
+    </form>
+    {error && <InlineNotice message={error} />}
+    {forecast && <>
+      {forecast.forecast_available ? <div className="metric-grid yield-metrics">
+        <MetricCard icon={<Sprout size={16} />} label="Expected harvest" value={`${forecast.expected_harvest_kg?.toLocaleString() ?? "—"} kg`} note={`${forecast.farm.area_hectares} ha · ${forecast.crop}`} tone="green" />
+        <MetricCard icon={<BarChart3 size={16} />} label="Reference yield" value={`${forecast.reference_yield_kg_per_hectare?.toLocaleString() ?? "—"} kg/ha`} note={forecast.forecast_basis === "farm_history" ? "From recorded annual farm harvests" : `Sourced benchmark · ${forecast.benchmark?.reference_year}`} tone="lime" />
+        <MetricCard icon={<CloudSun size={16} />} label="Climate context" value={climate?.available ? `${climate.risks?.length ?? 0} signals` : "Unavailable"} note={climate?.available ? `${climate.source} historical observations` : climate?.detail || "Historical climate not available"} tone="blue" />
+      </div> : <div className="panel yield-no-benchmark"><div className="empty-icon"><BarChart3 size={18} /></div><strong>No yield baseline available for {forecast.crop}</strong><p>Record a harvest on this farm or ask an administrator to add a district or national yield benchmark with its source. No quantity is guessed.</p></div>}
+      {climate?.available && climate.risks?.length ? <div className="yield-risk-list">{climate.risks.map((risk, index) => <article className={`panel risk-card ${risk.level}`} key={`${risk.type}-${index}`}><div className="risk-level">{risk.level === "high" ? "REVIEW SOON" : "WATCH"}</div><h3>{risk.type.replaceAll("_", " ")}</h3><div className="risk-observed">{risk.observed} <small>{risk.unit} observed</small></div><p>{risk.action}</p></article>)}</div>
+        : climate?.available && <div className="yield-climate-note"><CloudSun size={15} /> No configured historical climate screening thresholds were triggered. This does not confirm favorable conditions.</div>}
+      {climate && !climate.available && <div className="yield-climate-note"><ShieldAlert size={15} /> Climate context is unavailable: {climate.detail || "No recent observations are available."}</div>}
+      <div className="yield-content-grid">
+        <section className="panel yield-trend-panel">
+          <div className="panel-heading"><div><h3>Recorded production trend</h3><p>Annual harvest totals · {forecast.crop} · {forecast.farm.name}</p></div><TrendingUp size={17} className="panel-heading-icon" /></div>
+          {annualData.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={annualData} margin={{ top: 10, right: 4, bottom: 0, left: -20 }}><defs><linearGradient id="harvestFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#23cf83" stopOpacity={0.28} /><stop offset="100%" stopColor="#23cf83" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#ffffff0b" vertical={false} /><XAxis dataKey="year" tick={{ fill: "#82958d", fontSize: 10 }} tickLine={false} axisLine={false} /><YAxis tick={{ fill: "#82958d", fontSize: 10 }} tickLine={false} axisLine={false} /><Tooltip contentStyle={{ background: "#0c2621", border: "1px solid #24463b", borderRadius: 9, color: "#eff7f0", fontSize: 10 }} formatter={(value: number) => [`${value.toLocaleString()} kg`, "Harvest"]} /><Area dataKey="quantity_kg" name="Harvest (kg)" type="monotone" stroke="#25d38a" strokeWidth={2} fill="url(#harvestFill)" /></AreaChart></ResponsiveContainer></div> : <EmptyState title="No production history yet" text="Add actual harvest records to build a season-by-season production trend." />}
+          {!!forecast.benchmark_trend.length && <div className="benchmark-history"><strong>Sourced benchmark history</strong>{forecast.benchmark_trend.map((item) => <span key={`${item.reference_year}-${item.district}`}>{item.reference_year} · {Number(item.yield_kg_per_hectare).toLocaleString()} kg/ha · {item.district || "National"} · <a href={item.source_url} target="_blank" rel="noreferrer">{item.source_title}</a></span>)}</div>}
+        </section>
+        {canRecordHarvest && selectedFarm && <form className="panel harvest-entry" onSubmit={(event) => void recordHarvest(event)}>
+          <div className="form-heading-icon"><Sprout size={18} /></div><h3>Record an actual harvest</h3><p>Use the total harvested amount for the season. These records are private to the farm owner and help establish a farm-specific baseline.</p>
+          <label>Harvest date<input required type="date" max={new Date().toISOString().slice(0, 10)} value={harvestDate} onChange={(event) => setHarvestDate(event.target.value)} /></label>
+          <label>Harvest quantity (kg)<input required type="number" min="0.01" step="0.01" value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="e.g. 850" /></label>
+          {harvestError && <InlineNotice message={harvestError} />}
+          {harvestNotice && <div className="success-message"><Check size={14} />{harvestNotice}</div>}
+          <button className="button button-primary" disabled={busy || !quantity}>{busy ? "Saving…" : "Save harvest record"}</button>
+        </form>}
+      </div>
+      <div className="yield-method-note"><ShieldAlert size={15} />{forecast.methodology} {climate?.methodology}</div>
+    </>}
+    {!farms.length && <div className="panel large-empty"><EmptyState title="Add a farm to forecast production" text="Farm area and crop details are needed to estimate expected harvest." /></div>}
+  </>;
+}
+
+function MarketPage() {
+  const [data, setData] = useState<MarketIntelligence | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [commodity, setCommodity] = useState("");
+  const [district, setDistrict] = useState("");
+  const [trendMarket, setTrendMarket] = useState("");
+  useEffect(() => {
+    api<MarketIntelligence>("/market-intelligence/")
+      .then((response) => { setData(response); setError(""); })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setLoading(false));
+  }, []);
+  const prices = data?.prices ?? [];
+  const commodities = [...new Set(prices.map((price) => price.commodity))].sort((a, b) => a.localeCompare(b));
+  const districts = [...new Set(prices.filter((price) => !commodity || price.commodity.toLowerCase() === commodity.toLowerCase()).map((price) => price.district))].sort((a, b) => a.localeCompare(b));
+  const currentPrices = useMemo(() => {
+    // Use the latest observation date in the dataset (not today) as the anchor.
+    // WFP publishes monthly; anchoring to today would hide all data when the
+    // feed is more than 30 days old.
+    const latestDate = prices.reduce<string | null>(
+      (best, p) => (best === null || p.observed_at > best ? p.observed_at : best),
+      null,
+    );
+    const anchor = latestDate ? new Date(`${latestDate}T00:00:00`) : new Date();
+    const cutoff = new Date(anchor);
+    cutoff.setDate(cutoff.getDate() - 90); // show up to 90 days before the latest observation
+    const current = prices.filter((price) =>
+      (!commodity || price.commodity.toLowerCase() === commodity.toLowerCase())
+      && (!district || price.district.toLowerCase() === district.toLowerCase())
+      && new Date(`${price.observed_at}T00:00:00`) >= cutoff
+    );
+    const latest = new Map<string, MarketPrice>();
+    for (const price of current) {
+      const key = `${price.commodity.toLowerCase()}|${price.market.toLowerCase()}|${price.district.toLowerCase()}|${price.currency}|${price.unit.toLowerCase()}|${price.price_type.toLowerCase()}`;
+      if (!latest.has(key)) latest.set(key, price);
+    }
+    return [...latest.values()];
+  }, [prices, commodity, district]);
+  const opportunities = useMemo(() => {
+    const comparable = new Map<string, MarketPrice[]>();
+    currentPrices.forEach((price) => {
+      const key = `${price.commodity.toLowerCase()}|${price.currency}|${price.unit.toLowerCase()}|${price.price_type.toLowerCase()}`;
+      comparable.set(key, [...(comparable.get(key) ?? []), price]);
+    });
+    return [...comparable.values()].filter((group) => group.length > 1).map((group) => {
+      const sorted = [...group].sort((a, b) => Number(a.price) - Number(b.price));
+      const low = sorted[0];
+      const high = sorted[sorted.length - 1];
+      return { low, high, spread: Number(high.price) - Number(low.price), spreadPct: (Number(high.price) - Number(low.price)) / Number(low.price) * 100 };
+    }).filter((item) => item.spread > 0);
+  }, [currentPrices]);
+  const activeMarkets = commodity ? [...new Map(prices.filter((price) =>
+    price.commodity.toLowerCase() === commodity.toLowerCase()
+    && (!district || price.district.toLowerCase() === district.toLowerCase())
+  ).map((price) => {
+    const key = JSON.stringify([price.market, price.district, price.price_type]);
+    return [key, { key, label: `${price.market} · ${price.district} · ${price.price_type}` }] as const;
+  })).values()].sort((a, b) => a.label.localeCompare(b.label)) : [];
+  const selectedTrendMarket = activeMarkets.some((market) => market.key === trendMarket) ? trendMarket : activeMarkets[0]?.key ?? "";
+  const trend = prices.filter((price) =>
+    !!commodity
+    && price.commodity.toLowerCase() === commodity.toLowerCase()
+    && (!district || price.district.toLowerCase() === district.toLowerCase())
+    && JSON.stringify([price.market, price.district, price.price_type]) === selectedTrendMarket
+  ).sort((a, b) => a.observed_at.localeCompare(b.observed_at))
+    .map((price) => ({ date: price.observed_at, price: Number(price.price), unit: price.unit, currency: price.currency }));
+  return <>
+    <PageHeading eyebrow="WFP + ADMIN SOURCES · LAST 12 MONTHS" title="Agricultural market intelligence" description="Review attributed Uganda market observations, price types, and recent differences across markets." />
+    <div className="market-controls">
+      <label>Commodity<select value={commodity} onChange={(event) => { setCommodity(event.target.value); setTrendMarket(""); }}><option value="">All commodities</option>{commodities.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+      <label>District<select value={district} onChange={(event) => setDistrict(event.target.value)}><option value="">All districts</option>{districts.map((item) => <option key={item} value={item}>{item}</option>)}</select></label>
+    </div>
+    {error && <InlineNotice message={error} />}
+    {opportunities.length > 0 && <section className="market-opportunities"><div className="market-section-heading"><div><div className="eyebrow">PRICE SPREADS · MATCHING UNIT, CURRENCY AND TYPE</div><h2>Potential selling opportunities</h2></div><span>Observed in the last 30 days · excludes transport, quality and fees</span></div><div className="opportunity-grid">{opportunities.map((item) => <article className="panel opportunity-card" key={`${item.low.currency}-${item.low.unit}-${item.low.price_type}`}><span className="opportunity-delta">+{item.spreadPct.toFixed(1)}% spread</span><strong>{item.high.market}, {item.high.district}</strong><p>{item.high.price_type}: {formatMarketPrice(item.high.price, item.high.currency, item.high.unit)} versus {formatMarketPrice(item.low.price, item.low.currency, item.low.unit)} at {item.low.market}</p><small>Market observations are not guaranteed farm-gate offers. Compare transport cost, quality, fees and freshness before choosing a buyer.</small></article>)}</div></section>}
+    <section className="market-section">
+      <div className="market-section-heading"><div><h2>Latest local prices</h2><p>Most recent published observation per market; dates and price types are shown for each record.</p></div><Store size={17} className="panel-heading-icon" /></div>
+      {loading ? <div className="panel large-empty"><EmptyState loading title="Loading market prices" text="Retrieving sourced market observations." /></div>
+        : currentPrices.length ? <div className="market-price-grid">{currentPrices.map((price) => <article className="panel market-price-card" key={price.id}><div className="market-price-top"><span className="market-price-commodity">{price.commodity}</span><small>{price.observed_at}</small></div><h3>{price.market}</h3><p>{price.district} · {price.price_type}</p><strong>{formatMarketPrice(price.price, price.currency, price.unit)}</strong><a href={price.source_url} target="_blank" rel="noreferrer">Source: {price.source_title}</a></article>)}</div>
+          : <div className="panel large-empty"><EmptyState title="No recent sourced prices" text={data?.data_note || "Administrators can add attributed market observations in Django Admin. No prices are fabricated."} /></div>}
+    </section>
+    <section className="panel market-trend-panel">
+      <div className="panel-heading"><div><h3>Market price trend</h3><p>{selectedTrendMarket ? `${commodity || "All commodities"} · ${activeMarkets.find((market) => market.key === selectedTrendMarket)?.label} · up to 12 months` : "Historical source observations"}</p></div>{activeMarkets.length > 1 && <select className="market-trend-select" aria-label="Select market for price trend" value={selectedTrendMarket} onChange={(event) => setTrendMarket(event.target.value)}>{activeMarkets.map((market) => <option key={market.key} value={market.key}>{market.label}</option>)}</select>}</div>
+      {trend.length > 1 ? <div className="chart-wrap market-chart"><ResponsiveContainer width="100%" height="100%"><AreaChart data={trend} margin={{ top: 10, right: 4, bottom: 0, left: -15 }}><defs><linearGradient id="marketPriceFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#23cf83" stopOpacity={0.27} /><stop offset="100%" stopColor="#23cf83" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#ffffff0b" vertical={false} /><XAxis dataKey="date" tick={{ fill: "#82958d", fontSize: 9 }} tickLine={false} axisLine={false} minTickGap={30} /><YAxis tick={{ fill: "#82958d", fontSize: 9 }} tickLine={false} axisLine={false} /><Tooltip contentStyle={{ background: "#0c2621", border: "1px solid #24463b", borderRadius: 9, color: "#eff7f0", fontSize: 10 }} formatter={(value: number, _name, item) => [formatMarketPrice(value, item.payload.currency, item.payload.unit), "Price"]} /><Area dataKey="price" type="monotone" stroke="#25d38a" strokeWidth={2} fill="url(#marketPriceFill)" /></AreaChart></ResponsiveContainer></div>       : <div className="market-trend-empty">{loading ? "Loading price history…" : !commodity ? "Select a commodity to view market price trends." : "At least two attributed observations for a market are needed to show a trend."}</div>}
+    </section>
+    {data && <div className="market-data-note"><ShieldAlert size={14} />{data.data_note} WFP survey prices are not guaranteed farm-gate buying offers; contact your extension team if your market or commodity is missing.</div>}
+  </>;
+}
+
+function formatMarketPrice(price: string | number, currency: string, unit: string) {
+  return `${currency} ${Number(price).toLocaleString("en-UG", { maximumFractionDigits: 2 })} / ${unit}`;
+}
+
 function AnalyticsPage({ farms }: { farms: Farm[] }) {
   const [analytics, setAnalytics] = useState<{ farm_count: number; total_hectares: number; crop_distribution: { crop: string; count: number }[] } | null>(null);
   const [error, setError] = useState("");
@@ -601,12 +979,43 @@ function ProfilePage({ user, onUpdated }: { user: User; onUpdated: (user: User) 
   const [form, setForm] = useState({ first_name: user.first_name, last_name: user.last_name, email: user.email, district: user.district, phone: user.phone });
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const photoInput = useRef<HTMLInputElement>(null);
   async function submit(e: FormEvent) {
     e.preventDefault(); setNotice(""); setError("");
     try { const updated = await api<User>("/auth/me/", { method: "PATCH", body: JSON.stringify(form) }); onUpdated(updated); setNotice("Profile saved."); }
     catch (err) { setError(err instanceof Error ? err.message : "Profile could not be saved."); }
   }
-  return <><PageHeading eyebrow="ACCOUNT" title="Profile settings" description="Manage the account information used in your AgriCloud workspace." /><form className="panel profile-form" onSubmit={submit}><div className="profile-intro"><div className="profile-large-avatar">{initials(user)}</div><div><h3>{user.first_name || user.username} {user.last_name}</h3><span>{roleLabel(user.role)} · {user.username}</span></div></div><div className="form-grid"><label>First name<input value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label><label>Last name<input value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label><label>Email address<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>District<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label><label>Phone<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label></div>{notice && <div className="success-message"><Check size={15} />{notice}</div>}{error && <InlineNotice message={error} />}<div className="form-actions"><span>Role: {roleLabel(user.role)} · Roles are assigned by an administrator.</span><button className="button button-primary">Save changes</button></div></form></>;
+  async function uploadPhoto(file: File) {
+    setNotice(""); setError("");
+    if (file.size > 5 * 1024 * 1024) { setError("Choose an image that is 5 MB or smaller."); return; }
+    if (file.type && !["image/jpeg", "image/png", "image/webp"].includes(file.type)) { setError("Choose a JPEG, PNG, or WebP image."); return; }
+    const data = new FormData();
+    data.append("profile_image", file);
+    setPhotoBusy(true);
+    try {
+      const updated = await api<User>("/auth/me/profile-image/", { method: "POST", body: data });
+      onUpdated(updated);
+      setNotice("Profile picture updated.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Profile picture could not be uploaded."); }
+    finally { setPhotoBusy(false); }
+  }
+  async function removePhoto() {
+    setNotice(""); setError(""); setPhotoBusy(true);
+    try {
+      const updated = await api<User>("/auth/me/profile-image/", { method: "DELETE" });
+      onUpdated(updated);
+      setNotice("Profile picture removed.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Profile picture could not be removed."); }
+    finally { setPhotoBusy(false); }
+  }
+  return <><PageHeading eyebrow="ACCOUNT" title="Profile settings" description="Manage the account information used in your AgriCloud workspace." /><form className="panel profile-form" onSubmit={submit}><div className="profile-intro"><UserAvatar user={user} className="profile-large-avatar" /><div className="profile-identity"><h3>{user.first_name || user.username} {user.last_name}</h3><span>{roleLabel(user.role)} · {user.username}</span><div className="profile-photo-actions"><input ref={photoInput} className="profile-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a profile picture" disabled={photoBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadPhoto(file); event.target.value = ""; }} /><button type="button" className="button button-secondary button-small" disabled={photoBusy} onClick={() => photoInput.current?.click()}>{photoBusy ? "Updating photo…" : user.profile_image ? "Change photo" : "Upload photo"}</button>{user.profile_image && <button type="button" className="text-button profile-remove-photo" disabled={photoBusy} onClick={() => void removePhoto()}>Remove</button>}<small>JPG, PNG or WebP · Up to 5 MB</small></div></div></div><div className="form-grid"><label>First name<input value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label><label>Last name<input value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label><label>Email address<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>District<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label><label>Phone<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label></div>{notice && <div className="success-message"><Check size={15} />{notice}</div>}{error && <InlineNotice message={error} />}<div className="form-actions"><span>Role: {roleLabel(user.role)} · Roles are assigned by an administrator.</span><button className="button button-primary">Save changes</button></div></form></>;
+}
+
+function UserAvatar({ user, className }: { user: User; className: string }) {
+  return user.profile_image
+    ? <img className={`${className} user-photo`} src={user.profile_image} alt="" aria-hidden="true" />
+    : <span className={className} aria-hidden="true">{initials(user)}</span>;
 }
 
 function AuthPage({ onSignIn, onRegister, error }: { onSignIn: (username: string, password: string) => Promise<void>; onRegister: (data: Record<string, string>) => Promise<void>; error: string }) {
@@ -614,6 +1023,7 @@ function AuthPage({ onSignIn, onRegister, error }: { onSignIn: (username: string
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState(error);
   const [form, setForm] = useState({ username: "", password: "", first_name: "", last_name: "", email: "", district: "" });
+  useEffect(() => { setMessage(error); }, [error]);
   async function submit(event: FormEvent) {
     event.preventDefault(); setBusy(true); setMessage("");
     try {
@@ -627,5 +1037,9 @@ function AuthPage({ onSignIn, onRegister, error }: { onSignIn: (username: string
 
 function initials(user: User) { return `${user.first_name?.[0] ?? user.username[0] ?? "A"}${user.last_name?.[0] ?? ""}`.toUpperCase(); }
 function roleLabel(role: User["role"]) { return role === "extension" ? "Extension worker" : role === "admin" ? "Administrator" : "Farmer"; }
+function forecastDayLabel(value: string) {
+  const date = new Date(`${value}T12:00:00`);
+  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("en-UG", { weekday: "short", day: "numeric", month: "short" }).format(date);
+}
 
 export default App;
