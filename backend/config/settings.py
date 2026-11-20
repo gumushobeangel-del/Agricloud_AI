@@ -164,3 +164,5 @@ if not DEBUG:
         for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
         if origin.strip()
     ]
+# Compatibility shim: django-cloudinary-storage still reads this removed setting
+STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
