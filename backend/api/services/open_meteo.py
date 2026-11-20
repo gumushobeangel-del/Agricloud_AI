@@ -2,6 +2,7 @@
 import hashlib
 import logging
 import math
+import time
 
 import requests
 from django.conf import settings
@@ -12,8 +13,14 @@ from .nasa_power import WeatherServiceError
 
 logger = logging.getLogger(__name__)
 
-FRESH_CACHE_SECONDS = 60 * 60
-STALE_CACHE_SECONDS = 24 * 60 * 60
+# Fresh cache: 30 min — reduces how often we hit the free-tier API.
+FRESH_CACHE_SECONDS = 30 * 60
+# Stale cache: 48 h — kept as a fallback when the live request fails.
+STALE_CACHE_SECONDS = 48 * 60 * 60
+
+# Retry settings for transient failures (429, 5xx, network errors).
+_MAX_RETRIES = 3
+_RETRY_BACKOFF = [1, 3, 7]   # seconds to wait before each retry attempt
 
 
 WEATHER_CODES = {
@@ -112,61 +119,85 @@ def fetch_current_weather(latitude, longitude):
     if cached is not None:
         return cached
 
-    # Request weather data from Open-Meteo.
-    try:
-        response = requests.get(
-            settings.OPEN_METEO_BASE_URL,
-            params={
-                "latitude": lat,
-                "longitude": lon,
-                "current": (
-                    "temperature_2m,relative_humidity_2m,apparent_temperature,"
-                    "precipitation,weather_code,wind_speed_10m,"
-                    "wind_direction_10m,cloud_cover,is_day"
-                ),
-                "daily": (
-                    "weather_code,temperature_2m_max,temperature_2m_min,"
-                    "precipitation_sum,precipitation_probability_max,"
-                    "et0_fao_evapotranspiration"
-                ),
-                "forecast_days": 7,
-                "timezone": "auto",
-                "temperature_unit": "celsius",
-                "wind_speed_unit": "kmh",
-                "precipitation_unit": "mm",
-            },
-            timeout=settings.OPEN_METEO_TIMEOUT,
-        )
+    # Also serve a still-valid stale entry rather than hammering the API on
+    # every request when the fresh key has simply expired.
+    stale = cache.get(stale_key)
 
-        response.raise_for_status()
-        payload = response.json()
+    # Request weather data from Open-Meteo, retrying on transient errors.
+    params = {
+        "latitude": lat,
+        "longitude": lon,
+        "current": (
+            "temperature_2m,relative_humidity_2m,apparent_temperature,"
+            "precipitation,weather_code,wind_speed_10m,"
+            "wind_direction_10m,cloud_cover,is_day"
+        ),
+        "daily": (
+            "weather_code,temperature_2m_max,temperature_2m_min,"
+            "precipitation_sum,precipitation_probability_max,"
+            "et0_fao_evapotranspiration"
+        ),
+        "forecast_days": 7,
+        "timezone": "auto",
+        "temperature_unit": "celsius",
+        "wind_speed_unit": "kmh",
+        "precipitation_unit": "mm",
+    }
 
-    except requests.RequestException as exc:
-        logger.warning(
-            "Open-Meteo request failed for coordinates %s, %s: %s",
-            lat,
-            lon,
-            exc,
-        )
+    last_exc = None
+    payload = None
 
-        # Use previously successful weather data if available.
-        stale = cache.get(stale_key)
+    for attempt in range(_MAX_RETRIES):
+        try:
+            response = requests.get(
+                settings.OPEN_METEO_BASE_URL,
+                params=params,
+                timeout=settings.OPEN_METEO_TIMEOUT,
+            )
+            response.raise_for_status()
+            payload = response.json()
+            break  # success — exit retry loop
 
+        except requests.HTTPError as exc:
+            last_exc = exc
+            status_code = exc.response.status_code if exc.response is not None else None
+            is_retryable = status_code in {429, 500, 502, 503, 504}
+
+            logger.warning(
+                "Open-Meteo HTTP %s on attempt %d/%d for %s, %s",
+                status_code, attempt + 1, _MAX_RETRIES, lat, lon,
+            )
+
+            if is_retryable and attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+                continue
+
+            # Non-retryable HTTP error or final attempt — fall through.
+            break
+
+        except requests.RequestException as exc:
+            last_exc = exc
+            logger.warning(
+                "Open-Meteo network error on attempt %d/%d for %s, %s: %s",
+                attempt + 1, _MAX_RETRIES, lat, lon, exc,
+            )
+            if attempt < _MAX_RETRIES - 1:
+                time.sleep(_RETRY_BACKOFF[attempt])
+                continue
+            break
+
+    # All attempts exhausted without a valid payload.
+    if payload is None:
         if stale is not None:
             logger.warning(
-                "Returning cached backup weather for coordinates %s, %s",
-                lat,
-                lon,
+                "Returning stale cached weather for %s, %s after %d failed attempts",
+                lat, lon, _MAX_RETRIES,
             )
             return stale
 
+        exc = last_exc
         if isinstance(exc, requests.HTTPError):
-            status_code = (
-                exc.response.status_code
-                if exc.response is not None
-                else None
-            )
-
+            status_code = exc.response.status_code if exc.response is not None else None
             if status_code == 429:
                 raise WeatherServiceError(
                     "The weather provider is receiving too many requests. "
@@ -175,21 +206,6 @@ def fetch_current_weather(latitude, longitude):
 
         raise WeatherServiceError(
             "Open-Meteo is temporarily unavailable. Please try again later."
-        ) from exc
-
-    except ValueError as exc:
-        logger.exception(
-            "Open-Meteo returned invalid JSON for coordinates %s, %s",
-            lat,
-            lon,
-        )
-
-        stale = cache.get(stale_key)
-        if stale is not None:
-            return stale
-
-        raise WeatherServiceError(
-            "Open-Meteo returned an invalid response."
         ) from exc
 
     # Validate and process the response.

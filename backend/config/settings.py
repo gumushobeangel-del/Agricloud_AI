@@ -23,7 +23,6 @@ INSTALLED_APPS = [
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
-    "cloudinary_storage",  # must come BEFORE django.contrib.staticfiles
     "django.contrib.staticfiles",
     "cloudinary",  # must come AFTER django.contrib.staticfiles
     "rest_framework",
@@ -164,8 +163,6 @@ if not DEBUG:
         for origin in os.getenv("CSRF_TRUSTED_ORIGINS", "").split(",")
         if origin.strip()
     ]
-# Compatibility shim: django-cloudinary-storage still reads this removed setting
-STATICFILES_STORAGE = "django.contrib.staticfiles.storage.StaticFilesStorage"
 
 LOGGING = {
     "version": 1,
