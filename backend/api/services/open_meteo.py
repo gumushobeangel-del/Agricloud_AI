@@ -1,4 +1,5 @@
 import hashlib
+import logging
 import math
 
 import requests
@@ -6,6 +7,9 @@ from django.conf import settings
 from django.core.cache import cache
 
 from .nasa_power import WeatherServiceError
+
+
+logger = logging.getLogger(__name__)
 
 
 WEATHER_CODES = {
@@ -45,34 +49,54 @@ def _number(value):
         number = float(value)
     except (TypeError, ValueError):
         return None
+
     return round(number, 1) if math.isfinite(number) else None
 
 
 def _weather_code(value):
     number = _number(value)
+
     return int(number) if number is not None and number.is_integer() else None
 
 
 def _daily_number(daily, key, index):
     values = daily.get(key)
+
     if not isinstance(values, list) or index >= len(values):
         return None
+
     return _number(values[index])
 
 
 def fetch_current_weather(latitude, longitude):
+    # Validate farm coordinates
     try:
-        lat, lon = round(float(latitude), 4), round(float(longitude), 4)
+        lat = round(float(latitude), 4)
+        lon = round(float(longitude), 4)
     except (TypeError, ValueError) as exc:
         raise ValueError("Valid farm coordinates are required.") from exc
-    if not math.isfinite(lat) or not -90 <= lat <= 90 or not math.isfinite(lon) or not -180 <= lon <= 180:
-        raise ValueError("Farm coordinates are outside valid latitude and longitude ranges.")
 
-    cache_key = "open-meteo:" + hashlib.sha256(f"{lat}:{lon}".encode()).hexdigest()
+    if (
+        not math.isfinite(lat)
+        or not -90 <= lat <= 90
+        or not math.isfinite(lon)
+        or not -180 <= lon <= 180
+    ):
+        raise ValueError(
+            "Farm coordinates are outside valid latitude and longitude ranges."
+        )
+
+    # Cache weather data for 15 minutes
+    cache_key = "open-meteo:" + hashlib.sha256(
+        f"{lat}:{lon}".encode()
+    ).hexdigest()
+
     cached = cache.get(cache_key)
+
     if cached is not None:
         return cached
 
+    # Request weather data from Open-Meteo
     try:
         response = requests.get(
             settings.OPEN_METEO_BASE_URL,
@@ -80,12 +104,14 @@ def fetch_current_weather(latitude, longitude):
                 "latitude": lat,
                 "longitude": lon,
                 "current": (
-                    "temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,"
-                    "weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,is_day"
+                    "temperature_2m,relative_humidity_2m,apparent_temperature,"
+                    "precipitation,weather_code,wind_speed_10m,"
+                    "wind_direction_10m,cloud_cover,is_day"
                 ),
                 "daily": (
-                    "weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum,"
-                    "precipitation_probability_max,et0_fao_evapotranspiration"
+                    "weather_code,temperature_2m_max,temperature_2m_min,"
+                    "precipitation_sum,precipitation_probability_max,"
+                    "et0_fao_evapotranspiration"
                 ),
                 "forecast_days": 7,
                 "timezone": "auto",
@@ -95,63 +121,145 @@ def fetch_current_weather(latitude, longitude):
             },
             timeout=settings.OPEN_METEO_TIMEOUT,
         )
+
         response.raise_for_status()
         payload = response.json()
-    except (requests.RequestException, ValueError) as exc:
-        raise WeatherServiceError("Open-Meteo is temporarily unavailable. Please try again later.") from exc
 
+    except requests.RequestException as exc:
+        logger.exception(
+            "Open-Meteo HTTP or connection failure. Coordinates: %s, %s",
+            lat,
+            lon,
+        )
+
+        raise WeatherServiceError(
+            "Open-Meteo is temporarily unavailable. Please try again later."
+        ) from exc
+
+    except ValueError as exc:
+        logger.exception(
+            "Open-Meteo returned invalid JSON. Coordinates: %s, %s",
+            lat,
+            lon,
+        )
+
+        raise WeatherServiceError(
+            "Open-Meteo returned an invalid response."
+        ) from exc
+
+    # Validate and process the response
     try:
-        current = payload["current"]
-        daily = payload["daily"]
-        timezone_name = payload["timezone"]
-        if not isinstance(current, dict) or not isinstance(daily, dict) or not isinstance(timezone_name, str):
-            raise TypeError("Unexpected response types.")
-        if not isinstance(current.get("time"), str) or not isinstance(daily.get("time"), list):
-            raise TypeError("Missing current or daily weather data.")
+        if not isinstance(payload, dict):
+            raise TypeError("Weather response is not a dictionary.")
 
+        current = payload.get("current")
+        daily = payload.get("daily")
+        timezone_name = payload.get("timezone")
+
+        if not isinstance(current, dict):
+            raise TypeError("Current weather data is missing or invalid.")
+
+        if not isinstance(daily, dict):
+            raise TypeError("Daily weather data is missing or invalid.")
+
+        if not isinstance(timezone_name, str):
+            raise TypeError("Timezone information is missing.")
+
+        if not isinstance(current.get("time"), str):
+            raise TypeError("Current weather timestamp is missing.")
+
+        forecast_dates = daily.get("time")
+
+        if not isinstance(forecast_dates, list) or not forecast_dates:
+            raise TypeError("Daily forecast dates are missing.")
+
+        # Process current weather
         current_code = _weather_code(current.get("weather_code"))
         raw_is_day = _number(current.get("is_day"))
+
         current_weather = {
             "data_type": "modelled_current_conditions",
             "time": current["time"],
             "temperature_c": _number(current.get("temperature_2m")),
             "feels_like_c": _number(current.get("apparent_temperature")),
-            "relative_humidity_pct": _number(current.get("relative_humidity_2m")),
+            "relative_humidity_pct": _number(
+                current.get("relative_humidity_2m")
+            ),
             "precipitation_mm": _number(current.get("precipitation")),
             "weather_code": current_code,
-            "condition": WEATHER_CODES.get(current_code, "Conditions unavailable"),
+            "condition": WEATHER_CODES.get(
+                current_code, "Conditions unavailable"
+            ),
             "wind_speed_kmh": _number(current.get("wind_speed_10m")),
-            "wind_direction_degrees": _number(current.get("wind_direction_10m")),
+            "wind_direction_degrees": _number(
+                current.get("wind_direction_10m")
+            ),
             "cloud_cover_pct": _number(current.get("cloud_cover")),
-            "is_day": bool(raw_is_day) if raw_is_day in {0, 1} else None,
+            "is_day": (
+                bool(raw_is_day)
+                if raw_is_day in {0, 1}
+                else None
+            ),
         }
 
+        # Process daily forecast
         forecast = []
-        for index, forecast_date in enumerate(daily["time"]):
+
+        for index, forecast_date in enumerate(forecast_dates):
             if not isinstance(forecast_date, str):
                 raise TypeError("Invalid forecast date.")
-            code = _weather_code(_daily_number(daily, "weather_code", index))
+
+            code = _weather_code(
+                _daily_number(daily, "weather_code", index)
+            )
+
             forecast.append({
                 "date": forecast_date,
                 "weather_code": code,
-                "condition": WEATHER_CODES.get(code, "Conditions unavailable"),
-                "temperature_max_c": _daily_number(daily, "temperature_2m_max", index),
-                "temperature_min_c": _daily_number(daily, "temperature_2m_min", index),
-                "precipitation_sum_mm": _daily_number(daily, "precipitation_sum", index),
-                "precipitation_probability_max_pct": _daily_number(daily, "precipitation_probability_max", index),
-                "et0_mm": _daily_number(daily, "et0_fao_evapotranspiration", index),
+                "condition": WEATHER_CODES.get(
+                    code, "Conditions unavailable"
+                ),
+                "temperature_max_c": _daily_number(
+                    daily, "temperature_2m_max", index
+                ),
+                "temperature_min_c": _daily_number(
+                    daily, "temperature_2m_min", index
+                ),
+                "precipitation_sum_mm": _daily_number(
+                    daily, "precipitation_sum", index
+                ),
+                "precipitation_probability_max_pct": _daily_number(
+                    daily, "precipitation_probability_max", index
+                ),
+                "et0_mm": _daily_number(
+                    daily, "et0_fao_evapotranspiration", index
+                ),
             })
-    except (KeyError, TypeError, ValueError) as exc:
-        raise WeatherServiceError("Open-Meteo returned weather data in an unexpected format.") from exc
 
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.exception(
+            "Open-Meteo returned an unexpected data structure."
+        )
+
+        raise WeatherServiceError(
+            "Open-Meteo returned weather data in an unexpected format."
+        ) from exc
+
+    # Build the final response
     result = {
         "source": "Open-Meteo",
         "attribution_url": "https://open-meteo.com/",
         "data_type": "modelled_current_conditions_and_forecast",
-        "location": {"latitude": lat, "longitude": lon},
+        "location": {
+            "latitude": lat,
+            "longitude": lon,
+        },
         "timezone": timezone_name,
         "current": current_weather,
         "daily_forecast": forecast,
     }
+
+    # Cache successful responses only
     cache.set(cache_key, result, 15 * 60)
+
     return result
