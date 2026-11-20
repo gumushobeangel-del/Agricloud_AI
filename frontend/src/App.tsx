@@ -426,6 +426,7 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [liveLoading, setLiveLoading] = useState(false);
   const [liveError, setLiveError] = useState("");
+  const [liveRefreshCooldown, setLiveRefreshCooldown] = useState(0);
   useEffect(() => { if (!selectedId && farms.length) setSelectedId(farms[0].id); }, [farms, selectedId]);
   async function loadLiveWeather() {
     if (!selectedId) return;
@@ -433,6 +434,18 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
     try { setLiveWeather(await api<LiveWeather>(`/weather/current/?farm_id=${selectedId}`)); }
     catch (err) { setLiveError(err instanceof Error ? err.message : "Could not load current weather."); }
     finally { setLiveLoading(false); }
+  }
+  async function refreshLiveWeather() {
+    if (liveRefreshCooldown > 0 || liveLoading) return;
+    await loadLiveWeather();
+    // 60-second cooldown after a manual refresh to protect the rate limit.
+    setLiveRefreshCooldown(60);
+    const tick = window.setInterval(() => {
+      setLiveRefreshCooldown((prev) => {
+        if (prev <= 1) { window.clearInterval(tick); return 0; }
+        return prev - 1;
+      });
+    }, 1000);
   }
   useEffect(() => {
     if (!selectedId) {
@@ -461,7 +474,7 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
     {farms.length > 0 && <section className="panel current-weather-panel">
       <div className="panel-heading">
         <div><div className="eyebrow">CURRENT CONDITIONS · MODEL ESTIMATE</div><h3>{selectedFarm?.name || "Selected farm"} · {selectedFarm?.district || "Uganda"}</h3><p>{liveWeather ? `Updated ${liveWeather.current.time.replace("T", " ")} · ${liveWeather.timezone}` : "Weather conditions and seven-day outlook"}</p></div>
-        <button className="button button-secondary button-small" disabled={liveLoading} onClick={() => void loadLiveWeather()}>{liveLoading ? "Refreshing…" : "Refresh current weather"}</button>
+        <button className="button button-secondary button-small" disabled={liveLoading || liveRefreshCooldown > 0} onClick={() => void refreshLiveWeather()}>{liveLoading ? "Refreshing…" : liveRefreshCooldown > 0 ? `Retry in ${liveRefreshCooldown}s` : "Refresh current weather"}</button>
       </div>
       {liveError && <InlineNotice message={liveError} />}
       {liveWeather ? <>
