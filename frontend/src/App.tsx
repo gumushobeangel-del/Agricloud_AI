@@ -435,11 +435,13 @@ function WeatherPage({ farms }: { farms: Farm[] }) {
     finally { setLiveLoading(false); }
   }
   useEffect(() => {
-    if (!selectedId) { setLiveWeather(null); return; }
+    if (!selectedId) {
+      setLiveWeather(null);
+      return;
+    }
+
     setLiveWeather(null);
     void loadLiveWeather();
-    const interval = window.setInterval(() => void loadLiveWeather(), 15 * 60 * 1000);
-    return () => window.clearInterval(interval);
   }, [selectedId]);
   async function load() {
     if (!selectedId) return;
