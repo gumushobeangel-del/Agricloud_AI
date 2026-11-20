@@ -1,4 +1,5 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import LandingPage from "./LandingPage";
 import {
   Activity, BarChart3, Bell, Bug, CalendarDays, Check, ChevronDown, ChevronRight, LogOut, Pencil,
   CloudSun, Droplets, Ellipsis, Leaf, MapPin, Menu, Plus, Search, ShieldAlert, Store, Upload, Wind,
@@ -41,6 +42,8 @@ function App() {
   const [booting, setBooting] = useState(Boolean(localStorage.getItem("agri_access")));
   const [authError, setAuthError] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
+  // Show landing page when no session exists and user hasn't clicked through yet.
+  const [showLanding, setShowLanding] = useState(!localStorage.getItem("agri_access"));
 
   const loadWorkspace = async () => {
     try {
@@ -116,6 +119,7 @@ function App() {
   }
 
   if (booting) return <div className="boot-screen"><div className="brand-mark"><Leaf size={18} /></div><span className="spinner" />Restoring your workspace…</div>;
+  if (!user && showLanding) return <LandingPage onGetStarted={() => setShowLanding(false)} />;
   if (!user) return <AuthPage onSignIn={signIn} onRegister={register} error={authError} />;
 
   return (
