@@ -1,3 +1,4 @@
+
 import hashlib
 import logging
 import math
@@ -10,6 +11,9 @@ from .nasa_power import WeatherServiceError
 
 
 logger = logging.getLogger(__name__)
+
+FRESH_CACHE_SECONDS = 60 * 60
+STALE_CACHE_SECONDS = 24 * 60 * 60
 
 
 WEATHER_CODES = {
@@ -55,7 +59,6 @@ def _number(value):
 
 def _weather_code(value):
     number = _number(value)
-
     return int(number) if number is not None and number.is_integer() else None
 
 
@@ -68,8 +71,17 @@ def _daily_number(daily, key, index):
     return _number(values[index])
 
 
+def _cached_weather(fresh_key, stale_key):
+    fresh = cache.get(fresh_key)
+
+    if fresh is not None:
+        return fresh
+
+    return cache.get(stale_key)
+
+
 def fetch_current_weather(latitude, longitude):
-    # Validate farm coordinates
+    # Validate farm coordinates.
     try:
         lat = round(float(latitude), 4)
         lon = round(float(longitude), 4)
@@ -86,17 +98,21 @@ def fetch_current_weather(latitude, longitude):
             "Farm coordinates are outside valid latitude and longitude ranges."
         )
 
-    # Cache weather data for 15 minutes
-    cache_key = "open-meteo:" + hashlib.sha256(
+    # Create separate fresh and backup cache keys.
+    coordinate_hash = hashlib.sha256(
         f"{lat}:{lon}".encode()
     ).hexdigest()
 
-    cached = cache.get(cache_key)
+    fresh_key = f"open-meteo:fresh:{coordinate_hash}"
+    stale_key = f"open-meteo:stale:{coordinate_hash}"
+
+    # Return fresh cached weather without calling the external API.
+    cached = cache.get(fresh_key)
 
     if cached is not None:
         return cached
 
-    # Request weather data from Open-Meteo
+    # Request weather data from Open-Meteo.
     try:
         response = requests.get(
             settings.OPEN_METEO_BASE_URL,
@@ -126,11 +142,36 @@ def fetch_current_weather(latitude, longitude):
         payload = response.json()
 
     except requests.RequestException as exc:
-        logger.exception(
-            "Open-Meteo HTTP or connection failure. Coordinates: %s, %s",
+        logger.warning(
+            "Open-Meteo request failed for coordinates %s, %s: %s",
             lat,
             lon,
+            exc,
         )
+
+        # Use previously successful weather data if available.
+        stale = cache.get(stale_key)
+
+        if stale is not None:
+            logger.warning(
+                "Returning cached backup weather for coordinates %s, %s",
+                lat,
+                lon,
+            )
+            return stale
+
+        if isinstance(exc, requests.HTTPError):
+            status_code = (
+                exc.response.status_code
+                if exc.response is not None
+                else None
+            )
+
+            if status_code == 429:
+                raise WeatherServiceError(
+                    "The weather provider is receiving too many requests. "
+                    "Please try again later."
+                ) from exc
 
         raise WeatherServiceError(
             "Open-Meteo is temporarily unavailable. Please try again later."
@@ -138,16 +179,20 @@ def fetch_current_weather(latitude, longitude):
 
     except ValueError as exc:
         logger.exception(
-            "Open-Meteo returned invalid JSON. Coordinates: %s, %s",
+            "Open-Meteo returned invalid JSON for coordinates %s, %s",
             lat,
             lon,
         )
+
+        stale = cache.get(stale_key)
+        if stale is not None:
+            return stale
 
         raise WeatherServiceError(
             "Open-Meteo returned an invalid response."
         ) from exc
 
-    # Validate and process the response
+    # Validate and process the response.
     try:
         if not isinstance(payload, dict):
             raise TypeError("Weather response is not a dictionary.")
@@ -173,7 +218,6 @@ def fetch_current_weather(latitude, longitude):
         if not isinstance(forecast_dates, list) or not forecast_dates:
             raise TypeError("Daily forecast dates are missing.")
 
-        # Process current weather
         current_code = _weather_code(current.get("weather_code"))
         raw_is_day = _number(current.get("is_day"))
 
@@ -202,7 +246,6 @@ def fetch_current_weather(latitude, longitude):
             ),
         }
 
-        # Process daily forecast
         forecast = []
 
         for index, forecast_date in enumerate(forecast_dates):
@@ -241,11 +284,15 @@ def fetch_current_weather(latitude, longitude):
             "Open-Meteo returned an unexpected data structure."
         )
 
+        stale = cache.get(stale_key)
+        if stale is not None:
+            return stale
+
         raise WeatherServiceError(
             "Open-Meteo returned weather data in an unexpected format."
         ) from exc
 
-    # Build the final response
+    # Build the final weather response.
     result = {
         "source": "Open-Meteo",
         "attribution_url": "https://open-meteo.com/",
@@ -259,7 +306,8 @@ def fetch_current_weather(latitude, longitude):
         "daily_forecast": forecast,
     }
 
-    # Cache successful responses only
-    cache.set(cache_key, result, 15 * 60)
+    # Save fresh weather and a longer-lived backup.
+    cache.set(fresh_key, result, FRESH_CACHE_SECONDS)
+    cache.set(stale_key, result, STALE_CACHE_SECONDS)
 
     return result
