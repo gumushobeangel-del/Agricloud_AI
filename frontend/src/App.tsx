@@ -128,7 +128,7 @@ function App() {
     <div className="app-shell">
       {mobileNav && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
-        <div className="brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>AgriCloud <span className="brand-ai">AI</span><small className="brand-tagline">Smart farming. Better tomorrow.</small></span></div>
+        <div className="brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span><strong>AgriCloud <i className="brand-ai">AI</i></strong><small className="brand-tagline">Smart farming. Better tomorrow.</small></span></div>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav" aria-label="Main navigation">
           {mainLinks.slice(0, 2).filter((item) => item.id !== "admin" || user.role === "admin").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
