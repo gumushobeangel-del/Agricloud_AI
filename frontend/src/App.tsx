@@ -14,6 +14,25 @@ import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { api, ApiError, CropDiseaseResult, Farm, FarmQuestion, HarvestRecord, IrrigationPlan, LiveWeather, MarketIntelligence, MarketPrice, NotificationItem, Recommendation, User, Weather, YieldForecast } from "./api";
 
 type Page = "overview" | "admin" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
+function normalizeUser(user: User): User {
+  const preferredLanguage = languages.some((item) => item.code === user.preferred_language)
+    ? user.preferred_language
+    : "en";
+  return {
+    ...user,
+    preferred_language: preferredLanguage,
+    farming_method: user.farming_method ?? "",
+    irrigation_method: user.irrigation_method ?? "",
+    farming_experience_years: user.farming_experience_years ?? null,
+    farming_interests: Array.isArray(user.farming_interests) ? user.farming_interests : [],
+    farming_goals: user.farming_goals ?? "",
+    personalize_assistant: user.personalize_assistant ?? false,
+    preferred_notifications: user.preferred_notifications ?? true,
+    onboarding_completed: user.onboarding_completed ?? true,
+    onboarding_step: user.onboarding_step ?? 0,
+  };
+}
+
 const mainLinks: { id: Page; label: string; icon: typeof Activity; message: "dashboard" | "administration" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" }[] = [
   { id: "overview", label: "Dashboard", icon: Activity, message: "dashboard" },
   { id: "admin", label: "Administration", icon: ShieldCheck, message: "administration" },
@@ -65,7 +84,7 @@ function App() {
   const loadWorkspace = async () => {
     let currentUser: User | null = null;
     try {
-      const current = await api<User>("/auth/me/");
+      const current = normalizeUser(await api<User>("/auth/me/"));
       currentUser = current;
       setUser(current);
       localStorage.setItem("agri_user_id", String(current.id));
@@ -80,7 +99,7 @@ function App() {
       if (savedId) {
         try {
           const cached = await getWorkspace(savedId);
-          if (cached) { setUser(cached.user); setFarms(cached.farms); setLanguage(cached.user.preferred_language); setPage("overview"); setOnline(false); setAuthError(""); setBooting(false); return; }
+          if (cached) { const savedUser = normalizeUser(cached.user); setUser(savedUser); setFarms(cached.farms); setLanguage(savedUser.preferred_language); setPage("overview"); setOnline(false); setAuthError(""); setBooting(false); return; }
         } catch { /* IndexedDB can be disabled; continue with the normal connection error. */ }
       }
       setUser(null);
@@ -102,7 +121,7 @@ function App() {
       }
       const savedId = Number(localStorage.getItem("agri_user_id"));
       const cached = savedId ? await getWorkspace(savedId).catch(() => null) : null;
-      if (cached) { setFarms(cached.farms); setOnline(false); setAuthError(""); }
+      if (cached) { setUser(normalizeUser(cached.user)); setFarms(cached.farms); setOnline(false); setAuthError(""); }
       else setAuthError(error instanceof Error ? error.message : "Unable to load farm records.");
     } finally { setBooting(false); }
   };
@@ -183,7 +202,7 @@ function App() {
   if (booting) return <div className="boot-screen"><div className="brand-mark"><Leaf size={18} /></div><span className="spinner" />Restoring your workspace…</div>;
   if (!user && showLanding) return <LandingPage onGetStarted={() => setShowLanding(false)} />;
   if (!user) return <AuthPage onSignIn={signIn} onRegister={register} error={authError} />;
-  if (user.role === "farmer" && !user.onboarding_completed) return <OnboardingPage user={user} farms={farms} onComplete={(updated) => { setUser(updated); void refreshFarms().catch(() => undefined); setPage("overview"); }} />;
+  if (user.role === "farmer" && !user.onboarding_completed) return <OnboardingPage user={user} farms={farms} onComplete={(updated) => { setUser(normalizeUser(updated)); void refreshFarms().catch(() => undefined); setPage("overview"); }} />;
 
   return (
     <div className="app-shell">
@@ -223,7 +242,7 @@ function App() {
           {page === "questions" && <QuestionsPage user={user} farms={farms} />}
           {page === "alerts" && <AlertsPage />}
           {page === "analytics" && <AnalyticsPage farms={farms} />}
-          {page === "profile" && <ProfilePage user={user} farms={farms} onUpdated={setUser} />}
+      {page === "profile" && <ProfilePage user={user} farms={farms} onUpdated={(updated) => setUser(normalizeUser(updated))} />}
         </div>
       </main>
     </div>
