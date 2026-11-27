@@ -236,7 +236,7 @@ function Dashboard({ farms, go }: { farms: Farm[]; go: (page: Page) => void }) {
 
   return <div className="reference-dashboard">
     <section className="farm-hero">
-      <img className="farm-hero-art" src="/farm-hero.svg" alt="Illustrated green farms and hills in Uganda" />
+      <img className="farm-hero-art" src="/sunrise-farmland.png" alt="Sunrise over green farmland, hills, and a farmhouse" />
       <div className="farm-hero-shade" />
       <div className="farm-hero-copy">
         <span className="farm-hero-kicker"><Leaf size={14} /> FARM INTELLIGENCE FOR UGANDA</span>
