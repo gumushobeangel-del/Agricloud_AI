@@ -420,14 +420,13 @@ class FarmQuestionViewSet(viewsets.ModelViewSet):
         question.answered_by = request.user
         question.answered_at = timezone.now()
         question.save(update_fields=["answer", "status", "answered_by", "answered_at"])
-        if question.asked_by.preferred_notifications:
-            Notification.objects.create(
-                user=question.asked_by,
-                farm=question.farm,
-                title="Extension worker replied",
-                message=f"A reply to your question about {question.farm.name} is available.",
-                level="info",
-            )
+        Notification.objects.create(
+            user=question.asked_by,
+            farm=question.farm,
+            title="Extension worker replied",
+            message=f"A reply to your question about {question.farm.name} is available.",
+            level="info",
+        )
         return Response(FarmQuestionSerializer(question).data)
 
 
@@ -652,14 +651,13 @@ def recommendations(request):
         basis=advice["basis"],
         risks=advice["risks"],
     )
-    if farm.owner.preferred_notifications:
-        Notification.objects.create(
-            user=farm.owner,
-            farm=farm,
-            title="Planting guidance updated",
-            message=f"New {record.crop} guidance is available for {farm.name}.",
-            level="info",
-        )
+    Notification.objects.create(
+        user=farm.owner,
+        farm=farm,
+        title="Planting guidance updated",
+        message=f"New {record.crop} guidance is available for {farm.name}.",
+        level="info",
+    )
     return Response(RecommendationSerializer(record).data, status=status.HTTP_201_CREATED)
 
 
@@ -916,10 +914,6 @@ def assistant_chat(request):
     question = request.data.get("message", "")
     if not isinstance(question, str) or not question.strip() or len(question) > 2000:
         return Response({"message": "Enter a question up to 2,000 characters."}, status=status.HTTP_400_BAD_REQUEST)
-    language = request.data.get("language", request.user.preferred_language)
-    language_names = {"en": "English", "lg": "Luganda", "nyn": "Runyankole", "te": "Ateso", "sw": "Swahili"}
-    if not isinstance(language, str) or language not in language_names:
-        return Response({"language": "Choose a supported language."}, status=status.HTTP_400_BAD_REQUEST)
     if (
         not settings.LLM_API_KEY
         or not settings.LLM_MODEL
@@ -949,19 +943,6 @@ def assistant_chat(request):
         else "No relevant verified agricultural source matched this question or its recent user-question context. "
         "Do not present any answer as locally verified."
     )
-    personalization = ""
-    if request.user.personalize_assistant:
-        preferences = [
-            f"District: {request.user.district}" if request.user.district else "",
-            f"Farming method: {request.user.farming_method}" if request.user.farming_method else "",
-            f"Irrigation method: {request.user.irrigation_method}" if request.user.irrigation_method else "",
-            f"Experience: {request.user.farming_experience_years} years" if request.user.farming_experience_years is not None else "",
-            f"Interests: {', '.join(request.user.farming_interests)}" if request.user.farming_interests else "",
-            f"Goals: {request.user.farming_goals[:500]}" if request.user.farming_goals else "",
-        ]
-        supplied = [item for item in preferences if item]
-        if supplied:
-            personalization = "Farmer-provided preferences (shared with consent; use only when relevant): " + "; ".join(supplied)
     payload = {
         "model": settings.LLM_MODEL,
         "temperature": 0.2,
@@ -969,15 +950,14 @@ def assistant_chat(request):
         "messages": [
             {"role": "system", "content": (
                 "You are a friendly, conversational agricultural information assistant for farmers in Uganda. "
-                f"Respond in {language_names[language]} using simple, concise language. If you cannot answer reliably in that language, say so clearly and offer a simple English response. "
-                "Respond naturally to greetings and follow-up questions. "
+                "Respond naturally to greetings and follow-up questions, keep answers concise, and use simple English. "
                 "When verified source context is provided, base crop-specific claims on it and cite its source titles where available. "
                 "When no relevant verified context is provided, answer general, low-risk questions when you can, clearly disclose that the guidance is general and not locally verified, "
                 "and ask a focused follow-up question when details matter. If you cannot answer reliably, say what is missing and recommend contacting a district extension worker. "
                 "Never invent sources, diagnoses, forecasts, pesticide or fertilizer rates, mixtures, or scientific certainty. "
                 "Only repeat specific treatment rates if a supplied verified source explicitly supports them, and remind users to follow product labels and local extension advice. "
                 "Distinguish historical observations from forecasts. Do not request or infer private farm or account details.\n\n"
-                f"{context_instructions}\n\n{personalization}"
+                f"{context_instructions}"
             )},
             *safe_messages,
             {"role": "user", "content": question.strip()},

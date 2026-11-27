@@ -1,163 +1,87 @@
 import { FormEvent, ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import LandingPage from "./LandingPage";
-import { languages, useLanguage } from "./i18n";
-import { CachedWorkspace, getPendingHarvests, getWorkspace, saveWorkspace, removePendingHarvest, flagPendingHarvest, queueHarvest, clearWorkspace, PendingHarvest } from "./offlineStore";
 import {
-  Activity, BarChart3, Bell, BookOpen, Bug, CalendarDays, Check, ChevronDown, ChevronRight, LogOut, Pencil,
+  Activity, BarChart3, Bell, Bug, CalendarDays, Check, ChevronDown, ChevronRight, LogOut, Pencil,
   CloudSun, Droplets, Ellipsis, Leaf, MapPin, Menu, Plus, Search, ShieldAlert, Store, Upload, Wind,
-  MessageCircleQuestion, Sprout, Sun, Thermometer, Tractor, TrendingUp, X, Users, ShieldCheck, Mic, Volume2, WifiOff,
+  MessageCircleQuestion, Sprout, Sun, Thermometer, Tractor, TrendingUp, X, Users, ShieldCheck,
 } from "lucide-react";
 import {
-  Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
+  Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from "recharts";
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { api, ApiError, CropDiseaseResult, Farm, FarmQuestion, HarvestRecord, IrrigationPlan, LiveWeather, MarketIntelligence, MarketPrice, NotificationItem, Recommendation, User, Weather, YieldForecast } from "./api";
 
 type Page = "overview" | "admin" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
-function normalizeUser(user: User): User {
-  const preferredLanguage = languages.some((item) => item.code === user.preferred_language)
-    ? user.preferred_language
-    : "en";
-  return {
-    ...user,
-    preferred_language: preferredLanguage,
-    farming_method: user.farming_method ?? "",
-    irrigation_method: user.irrigation_method ?? "",
-    farming_experience_years: user.farming_experience_years ?? null,
-    farming_interests: Array.isArray(user.farming_interests) ? user.farming_interests : [],
-    farming_goals: user.farming_goals ?? "",
-    personalize_assistant: user.personalize_assistant ?? false,
-    preferred_notifications: user.preferred_notifications ?? true,
-    onboarding_completed: user.onboarding_completed ?? true,
-    onboarding_step: user.onboarding_step ?? 0,
-  };
-}
-
-const mainLinks: { id: Page; label: string; icon: typeof Activity; message: "dashboard" | "administration" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" }[] = [
-  { id: "overview", label: "Dashboard", icon: Activity, message: "dashboard" },
-  { id: "admin", label: "Administration", icon: ShieldCheck, message: "administration" },
-  { id: "farms", label: "Crop management", icon: Tractor, message: "farms" },
-  { id: "weather", label: "Weather", icon: CloudSun, message: "weather" },
-  { id: "advisor", label: "Planting advisor", icon: Sprout, message: "advisor" },
-  { id: "disease", label: "Crop disease check", icon: Bug, message: "disease" },
-  { id: "irrigation", label: "Smart irrigation", icon: Droplets, message: "irrigation" },
-  { id: "yield", label: "Yield forecast", icon: BarChart3, message: "yield" },
-  { id: "markets", label: "Market intelligence", icon: Store, message: "markets" },
-  { id: "map", label: "Field monitoring", icon: MapPin, message: "map" },
-  { id: "assistant", label: "AI assistant", icon: Ellipsis, message: "assistant" },
-  { id: "questions", label: "Farmer questions", icon: MessageCircleQuestion, message: "questions" },
-  { id: "alerts", label: "Alerts", icon: ShieldAlert, message: "alerts" },
-  { id: "analytics", label: "Reports", icon: TrendingUp, message: "analytics" },
+const mainLinks: { id: Page; label: string; icon: typeof Activity }[] = [
+  { id: "overview", label: "Dashboard", icon: Activity },
+  { id: "admin", label: "Administration", icon: ShieldCheck },
+  { id: "farms", label: "Crop management", icon: Tractor },
+  { id: "weather", label: "Weather", icon: CloudSun },
+  { id: "advisor", label: "Planting advisor", icon: Sprout },
+  { id: "disease", label: "Crop disease check", icon: Bug },
+  { id: "irrigation", label: "Smart irrigation", icon: Droplets },
+  { id: "yield", label: "Yield forecast", icon: BarChart3 },
+  { id: "markets", label: "Market intelligence", icon: Store },
+  { id: "map", label: "Field monitoring", icon: MapPin },
+  { id: "assistant", label: "AI assistant", icon: Ellipsis },
+  { id: "questions", label: "Farmer questions", icon: MessageCircleQuestion },
+  { id: "alerts", label: "Alerts", icon: ShieldAlert },
+  { id: "analytics", label: "Reports", icon: TrendingUp },
 ];
-async function cacheFarmerWorkspace(user: User, farms: Farm[]) {
-  const [previousResult, cropResult, recommendationResult, harvestResult] = await Promise.allSettled([
-    getWorkspace(user.id),
-    api<CachedWorkspace["crops"]>("/crops/"), api<Recommendation[]>("/recommendations/list/"), api<HarvestRecord[]>("/harvests/"),
-  ]);
-  const previous = previousResult.status === "fulfilled" ? previousResult.value : null;
-  const privateSafeUser = {
-    ...user, email: "", phone: "", profile_image: null, farming_interests: [], farming_goals: "",
-  };
-  await saveWorkspace({
-    user: privateSafeUser,
-    farms,
-    crops: cropResult.status === "fulfilled" ? cropResult.value : previous?.crops ?? [],
-    recommendations: recommendationResult.status === "fulfilled" ? recommendationResult.value : previous?.recommendations ?? [],
-    harvests: harvestResult.status === "fulfilled" ? harvestResult.value : previous?.harvests ?? [],
-    savedAt: Date.now(),
-  });
-}
+const pageTitles: Record<Page, string> = {
+  overview: "Overview", admin: "System administration", farms: "My farms", weather: "Weather intelligence", advisor: "Planting advisor",
+  disease: "Crop disease detection", irrigation: "Smart irrigation",
+  yield: "Crop yield forecast", markets: "Market intelligence",
+  map: "Farm map", assistant: "AI farming assistant", questions: "Farmer questions", alerts: "Climate risk alerts",
+  analytics: "Farm analytics", profile: "Profile settings",
+};
 
 function App() {
-  const { setLanguage, t } = useLanguage();
   const [user, setUser] = useState<User | null>(null);
   const [farms, setFarms] = useState<Farm[]>([]);
   const [page, setPage] = useState<Page>("overview");
   const [booting, setBooting] = useState(Boolean(localStorage.getItem("agri_access")));
   const [authError, setAuthError] = useState("");
   const [mobileNav, setMobileNav] = useState(false);
-  const [online, setOnline] = useState(navigator.onLine);
-  const [syncNotice, setSyncNotice] = useState("");
   // Show landing page when no session exists and user hasn't clicked through yet.
   const [showLanding, setShowLanding] = useState(!localStorage.getItem("agri_access"));
 
   const loadWorkspace = async () => {
-    let currentUser: User | null = null;
     try {
-      const current = normalizeUser(await api<User>("/auth/me/"));
-      currentUser = current;
+      const current = await api<User>("/auth/me/");
       setUser(current);
-      localStorage.setItem("agri_user_id", String(current.id));
-      setLanguage(current.preferred_language);
       setPage(current.role === "admin" ? "admin" : "overview");
     } catch (error) {
-      if (error instanceof ApiError && error.status === 401) {
-        localStorage.removeItem("agri_access"); localStorage.removeItem("agri_refresh"); localStorage.removeItem("agri_user_id");
-        setUser(null); setAuthError(""); setBooting(false); return;
-      }
-      const savedId = Number(localStorage.getItem("agri_user_id"));
-      if (savedId) {
-        try {
-          const cached = await getWorkspace(savedId);
-          if (cached) { const savedUser = normalizeUser(cached.user); setUser(savedUser); setFarms(cached.farms); setLanguage(savedUser.preferred_language); setPage("overview"); setOnline(false); setAuthError(""); setBooting(false); return; }
-        } catch { /* IndexedDB can be disabled; continue with the normal connection error. */ }
-      }
+      // Always clear stale tokens on any auth or server error.
+      localStorage.removeItem("agri_access");
+      localStorage.removeItem("agri_refresh");
       setUser(null);
-      setAuthError(error instanceof Error ? "AgriCloud could not connect. Reconnect to load your account, or sign in on a device with saved offline data." : "AgriCloud could not connect.");
+      // Only surface a message for server errors. A 401 just means the session
+      // expired — the user will sign in again without seeing a confusing error.
+      if (error instanceof ApiError && error.status >= 500) {
+        setAuthError("The server is temporarily unavailable. Please try signing in again.");
+      } else {
+        setAuthError("");
+      }
       setBooting(false);
       return;
     }
     try {
-      const loadedFarms = await api<Farm[]>("/farms/");
-      setFarms(loadedFarms);
+      setFarms(await api<Farm[]>("/farms/"));
       setAuthError("");
-      if (currentUser?.role === "farmer") void cacheFarmerWorkspace(currentUser, loadedFarms).catch(() => undefined);
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        localStorage.removeItem("agri_access"); localStorage.removeItem("agri_refresh"); localStorage.removeItem("agri_user_id");
+        localStorage.removeItem("agri_access");
+        localStorage.removeItem("agri_refresh");
         setUser(null);
-        setAuthError("Your session expired. Sign in again to continue.");
-        return;
       }
-      const savedId = Number(localStorage.getItem("agri_user_id"));
-      const cached = savedId ? await getWorkspace(savedId).catch(() => null) : null;
-      if (cached) { setUser(normalizeUser(cached.user)); setFarms(cached.farms); setOnline(false); setAuthError(""); }
-      else setAuthError(error instanceof Error ? error.message : "Unable to load farm records.");
+      setAuthError(error instanceof Error ? error.message : "Unable to load farm records.");
     } finally { setBooting(false); }
   };
 
   useEffect(() => {
     if (localStorage.getItem("agri_access")) void loadWorkspace();
     else setBooting(false);
-  }, []);
-  useEffect(() => {
-    if (!online || !user || user.role !== "farmer") return;
-    let cancelled = false;
-    async function syncPending() {
-      const pending = await getPendingHarvests(user!.id).catch(() => []);
-      for (const item of pending) {
-        if (cancelled) return;
-        if (item.issue) continue;
-        try {
-          await api<HarvestRecord>("/harvests/", { method: "POST", body: JSON.stringify({ farm: item.farm, crop: item.crop, harvest_date: item.harvest_date, quantity_kg: item.quantity_kg, client_key: item.client_key }) });
-          await removePendingHarvest(item.id);
-          setSyncNotice("An offline harvest record was synced.");
-        } catch (error) {
-          if (error instanceof ApiError && error.status >= 400 && error.status < 500) await flagPendingHarvest(item.id, error.message);
-          else { setOnline(false); return; }
-        }
-      }
-      if (!cancelled) void cacheFarmerWorkspace(user!, farms).catch(() => undefined);
-    }
-    void syncPending();
-    return () => { cancelled = true; };
-  }, [online, user?.id]);
-  useEffect(() => {
-    const onlineHandler = () => setOnline(true);
-    const offlineHandler = () => setOnline(false);
-    window.addEventListener("online", onlineHandler);
-    window.addEventListener("offline", offlineHandler);
-    return () => { window.removeEventListener("online", onlineHandler); window.removeEventListener("offline", offlineHandler); };
   }, []);
 
   const refreshFarms = async () => setFarms(await api<Farm[]>("/farms/"));
@@ -190,9 +114,6 @@ function App() {
     }
     localStorage.removeItem("agri_access");
     localStorage.removeItem("agri_refresh");
-    const savedId = Number(localStorage.getItem("agri_user_id"));
-    if (savedId) await clearWorkspace(savedId).catch(() => undefined);
-    localStorage.removeItem("agri_user_id");
     setUser(null);
     setFarms([]);
     setPage("overview");
@@ -202,33 +123,32 @@ function App() {
   if (booting) return <div className="boot-screen"><div className="brand-mark"><Leaf size={18} /></div><span className="spinner" />Restoring your workspace…</div>;
   if (!user && showLanding) return <LandingPage onGetStarted={() => setShowLanding(false)} />;
   if (!user) return <AuthPage onSignIn={signIn} onRegister={register} error={authError} />;
-  if (user.role === "farmer" && !user.onboarding_completed) return <OnboardingPage user={user} farms={farms} onComplete={(updated) => { setUser(normalizeUser(updated)); void refreshFarms().catch(() => undefined); setPage("overview"); }} />;
 
   return (
     <div className="app-shell">
       {mobileNav && <button className="mobile-backdrop" aria-label="Close navigation" onClick={() => setMobileNav(false)} />}
       <aside className={`sidebar ${mobileNav ? "sidebar-open" : ""}`}>
-        <div className="brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>agricloud<span className="brand-ai">.ai</span></span></div>
-        <div className="workspace-label">{t("workspace")}</div>
+        <div className="brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>AgriCloud <span className="brand-ai">AI</span><small className="brand-tagline">Smart farming. Better tomorrow.</small></span></div>
+        <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav" aria-label="Main navigation">
-          {mainLinks.slice(0, 2).filter((item) => item.id !== "admin" || user.role === "admin").map((item) => <NavItem key={item.id} item={{ ...item, label: t(item.message) }} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
-          {mainLinks.slice(2, 4).map((item) => <NavItem key={item.id} item={{ ...item, label: t(item.message) }} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
-          <div className="nav-section">{t("fieldTools")}</div>
-          {mainLinks.slice(4).filter((item) => item.id !== "questions" || user.role !== "farmer").map((item) => <NavItem key={item.id} item={{ ...item, label: t(item.message) }} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          {mainLinks.slice(0, 2).filter((item) => item.id !== "admin" || user.role === "admin").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          {mainLinks.slice(2, 4).map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          <div className="nav-section">FIELD TOOLS</div>
+          {mainLinks.slice(4).filter((item) => item.id !== "questions" || user.role !== "farmer").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
         </nav>
         <div className="sidebar-bottom">
           <div className="season-card"><div className="season-icon"><Sun size={16} /></div><div><strong>Season watch</strong><span>Local climate context</span></div><ChevronRight size={15} /></div>
-          <button className={`nav-item ${page === "profile" ? "active" : ""}`} onClick={() => setPage("profile")}><UserAvatar user={user} className="avatar" /><span className="profile-label"><strong>{user.first_name || user.username}</strong><small>{t("profile")} · {roleLabel(user.role)}</small></span><ChevronDown size={14} /></button>
+          <button className={`nav-item ${page === "profile" ? "active" : ""}`} onClick={() => setPage("profile")}><UserAvatar user={user} className="avatar" /><span className="profile-label"><strong>{user.first_name || user.username}</strong><small>Settings · {roleLabel(user.role)}</small></span><ChevronDown size={14} /></button>
         </div>
       </aside>
       <main className="main-shell">
         <header className="topbar">
           <button className="icon-btn mobile-menu" aria-label="Open menu" onClick={() => setMobileNav(true)}><Menu size={19} /></button>
-          <div className="breadcrumbs"><span>{t("workspace")}</span><ChevronRight size={13} /><strong>{page === "profile" ? t("profile") : t(mainLinks.find((item) => item.id === page)?.message ?? "dashboard")}</strong></div>
-          <div className="topbar-actions"><span className={`connection-status ${online ? "connected" : "disconnected"}`} title={online ? "Online services available" : "Offline data only"}><i />{online ? "Online" : "Offline"}</span>{syncNotice && <span className="sync-notice">{syncNotice}</span>}<div className="searchbox"><Search size={16} /><input placeholder={t("search")} aria-label={t("search")} /><kbd>⌘ K</kbd></div><button className="icon-btn notification-btn" aria-label={t("alerts")} onClick={() => setPage("alerts")}><Bell size={18} /></button><button className="top-add-farm" onClick={() => setPage("farms")} aria-label={t("addFarm")}><Plus size={16} /><span>{t("addFarm")}</span></button><button className="user-chip" onClick={() => setPage("profile")} aria-label={t("profile")}><UserAvatar user={user} className="top-avatar" /><span className="user-chip-copy"><strong>{user.first_name || user.username}</strong><small>{roleLabel(user.role)}</small></span><ChevronDown size={13} /></button><button className="icon-btn logout-btn" aria-label={t("signOut")} title={t("signOut")} onClick={() => void signOut()}><LogOut size={16} /></button></div>
+          {page === "overview" ? <div className="dashboard-top-greeting"><UserAvatar user={user} className="greeting-avatar" /><span><strong>{new Date().getHours() < 12 ? "Good morning" : new Date().getHours() < 17 ? "Good afternoon" : "Good evening"}, {user.first_name || user.username}!</strong><small>May your farms thrive today.</small></span></div> : <div className="breadcrumbs"><span>Workspace</span><ChevronRight size={13} /><strong>{pageTitles[page]}</strong></div>}
+          <div className="topbar-actions"><div className="searchbox"><Search size={16} /><input placeholder="Search farms, crops..." aria-label="Search" /><kbd>⌘ K</kbd></div><button className="icon-btn notification-btn" aria-label="Notifications" onClick={() => setPage("alerts")}><Bell size={18} /></button><button className="top-add-farm" onClick={() => setPage("farms")} aria-label="Open farm management"><Plus size={16} /><span>Add farm</span></button><button className="user-chip" onClick={() => setPage("profile")} aria-label="Open profile settings"><UserAvatar user={user} className="top-avatar" /><span className="user-chip-copy"><strong>{user.first_name || user.username}</strong><small>{roleLabel(user.role)}</small></span><ChevronDown size={13} /></button><button className="icon-btn logout-btn" aria-label="Sign out" title="Sign out" onClick={() => void signOut()}><LogOut size={16} /></button></div>
         </header>
         <div className="content">
-          {page === "overview" && <Dashboard user={user} farms={farms} go={setPage} online={online} />}
+          {page === "overview" && <Dashboard farms={farms} go={setPage} />}
           {page === "admin" && user.role === "admin" && <AdminPage user={user} farms={farms} go={setPage} />}
           {page === "farms" && <FarmsPage farms={farms} refresh={refreshFarms} readOnly={user.role === "extension"} />}
           {page === "weather" && <WeatherPage farms={farms} />}
@@ -242,7 +162,7 @@ function App() {
           {page === "questions" && <QuestionsPage user={user} farms={farms} />}
           {page === "alerts" && <AlertsPage />}
           {page === "analytics" && <AnalyticsPage farms={farms} />}
-      {page === "profile" && <ProfilePage user={user} farms={farms} onUpdated={(updated) => setUser(normalizeUser(updated))} />}
+          {page === "profile" && <ProfilePage user={user} onUpdated={setUser} />}
         </div>
       </main>
     </div>
@@ -258,19 +178,15 @@ function PageHeading({ eyebrow, title, description, action }: { eyebrow?: string
   return <div className="page-heading"><div>{eyebrow && <div className="eyebrow">{eyebrow}</div>}<h1>{title}</h1><p>{description}</p></div>{action}</div>;
 }
 
-function Dashboard({ user, farms, go, online }: { user: User; farms: Farm[]; go: (page: Page) => void; online: boolean }) {
-  const { t } = useLanguage();
+function Dashboard({ farms, go }: { farms: Farm[]; go: (page: Page) => void }) {
   const [weather, setWeather] = useState<Weather | null>(null);
   const [weatherError, setWeatherError] = useState("");
   const [liveWeather, setLiveWeather] = useState<LiveWeather | null>(null);
   const [liveWeatherError, setLiveWeatherError] = useState("");
   const [analytics, setAnalytics] = useState<{ farm_count: number; total_hectares: number; crop_distribution: { crop: string; count: number }[] } | null>(null);
   const [recentRecommendation, setRecentRecommendation] = useState<Recommendation | null>(null);
-  const [cachedWorkspace, setCachedWorkspace] = useState<CachedWorkspace | null>(null);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [loading, setLoading] = useState(true);
-  useEffect(() => {
-    if (!online) void getWorkspace(user.id).then(setCachedWorkspace).catch(() => undefined);
-  }, [online, user.id]);
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -279,172 +195,86 @@ function Dashboard({ user, farms, go, online }: { user: User; farms: Farm[]; go:
       farms.length ? api<Weather>(`/weather/?farm_id=${farms[0].id}`) : Promise.resolve(null),
       api<Recommendation[]>("/recommendations/list/"),
       farms.length ? api<LiveWeather>(`/weather/current/?farm_id=${farms[0].id}`) : Promise.resolve(null),
-    ]).then(([statsResult, weatherResult, recommendationsResult, liveWeatherResult]) => {
+      api<NotificationItem[]>("/notifications/"),
+    ]).then(([statsResult, weatherResult, recommendationsResult, liveWeatherResult, notificationsResult]) => {
       if (!active) return;
       if (statsResult.status === "fulfilled") setAnalytics(statsResult.value);
-      if (weatherResult.status === "fulfilled") {
-        setWeather(weatherResult.value);
-        if (weatherResult.value) setWeatherError("");
-      } else setWeatherError(weatherResult.reason instanceof Error ? weatherResult.reason.message : "Could not load climate observations.");
+      if (weatherResult.status === "fulfilled") { setWeather(weatherResult.value); setWeatherError(""); }
+      else setWeatherError(weatherResult.reason instanceof Error ? weatherResult.reason.message : "Could not load climate observations.");
       if (recommendationsResult.status === "fulfilled") setRecentRecommendation(recommendationsResult.value[0] ?? null);
-      else if (!navigator.onLine) void getWorkspace(user.id).then((snapshot) => { if (active && snapshot) { setCachedWorkspace(snapshot); setRecentRecommendation(snapshot.recommendations[0] ?? null); } }).catch(() => undefined);
-      if (liveWeatherResult.status === "fulfilled") {
-        setLiveWeather(liveWeatherResult.value);
-        setLiveWeatherError("");
-      } else {
-        setLiveWeather(null);
-        setLiveWeatherError(liveWeatherResult.reason instanceof Error ? liveWeatherResult.reason.message : "Could not load current weather.");
-      }
+      if (liveWeatherResult.status === "fulfilled") { setLiveWeather(liveWeatherResult.value); setLiveWeatherError(""); }
+      else { setLiveWeather(null); setLiveWeatherError(liveWeatherResult.reason instanceof Error ? liveWeatherResult.reason.message : "Could not load current weather."); }
+      if (notificationsResult.status === "fulfilled") setNotifications(notificationsResult.value);
     }).finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [farms, user.id]);
+  }, [farms]);
   useEffect(() => {
     if (!farms.length) return;
     const interval = window.setInterval(() => {
-      api<LiveWeather>(`/weather/current/?farm_id=${farms[0].id}`)
-        .then((data) => { setLiveWeather(data); setLiveWeatherError(""); })
-        .catch((err: Error) => setLiveWeatherError(err.message));
+      api<LiveWeather>(`/weather/current/?farm_id=${farms[0].id}`).then(setLiveWeather).catch((err: Error) => setLiveWeatherError(err.message));
     }, 15 * 60 * 1000);
     return () => window.clearInterval(interval);
   }, [farms]);
-  const latestObservation = weather?.observations.at(-1);
-  const latest = latestObservation?.values;
-  const current = liveWeather?.current;
-  const rainfallValues = weather?.observations
-    .map((day) => day.values.PRECTOTCORR?.value)
-    .filter((value): value is number => value !== undefined && Number.isFinite(value)) ?? [];
-  const rainfall = rainfallValues.length ? rainfallValues.reduce((sum, value) => sum + value, 0) : null;
-  const chartData = weather?.observations.map((day) => ({
-    date: day.date.slice(5),
-    rain: day.values.PRECTOTCORR?.value ?? null,
-    temp: day.values.T2M?.value ?? null,
-  })) ?? [];
+
+  const chartData = weather?.observations.map((day) => ({ date: day.date.slice(5), rain: day.values.PRECTOTCORR?.value ?? null, temp: day.values.T2M?.value ?? null })) ?? [];
   const cropData = analytics?.crop_distribution ?? [];
-  const name = user.first_name || user.username;
-  const dateLabel = new Intl.DateTimeFormat("en-UG", { weekday: "short", day: "numeric", month: "short" }).format(new Date());
-  const farm = farms[0];
-  const actions: { title: string; detail: string; icon: ReactNode; page: Page }[] = [
-    {
-      title: farms.length ? "Review farm records" : "Add your first farm",
-      detail: farms.length ? `${farms.length} location${farms.length === 1 ? "" : "s"} saved in your workspace.` : "Save coordinates to enable local climate observations.",
-      icon: <MapPin size={15} />,
-      page: "farms",
-    },
-    {
-      title: recentRecommendation ? `Review ${recentRecommendation.crop} guidance` : "Generate planting guidance",
-      detail: recentRecommendation ? recentRecommendation.guidance : "Compare a crop plan with historical farm conditions.",
-      icon: <Sprout size={15} />,
-      page: "advisor",
-    },
-    {
-      title: weather ? "Explore climate history" : "View weather intelligence",
-      detail: weather ? `Historical observations through ${latestObservation?.date ?? weather.period.end}.` : "Review NASA POWER observations for a registered farm.",
-      icon: <CloudSun size={15} />,
-      page: "weather",
-    },
+  const area = analytics?.total_hectares ?? farms.reduce((sum, farm) => sum + (Number(farm.size_hectares) || 0), 0);
+  const cropCount = new Set(farms.map((farm) => farm.crop.trim().toLowerCase()).filter(Boolean)).size;
+  const districtCount = new Set(farms.map((farm) => farm.district.trim()).filter(Boolean)).size;
+  const unreadCount = notifications.filter((item) => !item.read_at).length;
+  const current = liveWeather?.current;
+  const dateLabel = new Intl.DateTimeFormat("en-UG", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
+  const metrics = [
+    { label: "My farms", value: farms.length, note: districtCount ? `${districtCount} district${districtCount === 1 ? "" : "s"} represented` : "Registered farm locations", icon: <Tractor size={22} />, tone: "green" },
+    { label: "Farm area", value: `${area.toLocaleString("en-UG", { maximumFractionDigits: 1 })} ha`, note: "Combined registered area", icon: <MapPin size={22} />, tone: "mint" },
+    { label: "Active crops", value: cropCount, note: "Across your registered farms", icon: <Sprout size={23} />, tone: "gold" },
+    { label: "Weather records", value: weather?.observations.length ?? "--", note: weather ? "Historical observations" : "Requires farm coordinates", icon: <CloudSun size={23} />, tone: "blue" },
+    { label: "Latest temperature", value: current?.temperature_c == null ? "--" : `${Math.round(current.temperature_c)} C`, note: current ? `${current.condition} in ${liveWeather?.farm.district}` : "Live conditions unavailable", icon: <Thermometer size={22} />, tone: "violet" },
+    { label: "Unread alerts", value: unreadCount, note: unreadCount ? "Needs your attention" : "You are all caught up", icon: <ShieldAlert size={22} />, tone: "mint" },
   ];
+  const recentAlerts = notifications.slice(0, 3);
 
-  return <>
-    {!online && <OfflineLibrary snapshot={cachedWorkspace} farms={farms} />}
-    <div className="dashboard-heading">
-      <div><div className="eyebrow">{dateLabel} · FIELD INTELLIGENCE</div><h1>{t("welcome")}, {name}</h1><p>{t("today")}</p></div>
-      <button className="button button-primary" onClick={() => go("farms")}><Plus size={16} /> {t("addFarm")}</button>
-    </div>
-    <section className="metric-grid">
-      <MetricCard icon={<Tractor size={17} />} label={t("totalFields")} value={analytics?.farm_count ?? (loading ? "—" : farms.length)} note="Registered farm locations" tone="green" />
-      <MetricCard icon={<Sprout size={17} />} label={t("totalArea")} value={analytics ? `${analytics.total_hectares.toLocaleString()} ha` : "—"} note="Across saved farm records" tone="lime" />
-      <MetricCard icon={<Leaf size={17} />} label={t("cropTypes")} value={analytics ? cropData.length : "—"} note="Reported across your farms" tone="blue" />
-      <MetricCard icon={<CloudSun size={17} />} label={t("observedDays")} value={weather ? weather.observations.length : "—"} note={weather ? `${weather.source} · historical` : "Add a farm for local data"} tone="orange" />
-    </section>
-    <section className="dashboard-overview-grid">
-      <section className="panel dashboard-field-panel">
-        <div className="panel-heading"><div><h3>Field conditions</h3><p>Latest available climate observation</p></div><button className="more-btn" aria-label="View weather intelligence" onClick={() => go("weather")}><Ellipsis size={18} /></button></div>
-        <div className="field-condition-summary">
-          <div className="condition-orbit"><div className="orbit"><div className="orbit-inner"><CloudSun size={22} /><b>{latest?.T2M ? `${latest.T2M.value.toFixed(0)}°` : "—"}</b><small>air temp</small></div></div></div>
-          <div className="field-condition-copy"><span className="condition-status"><i /> {latestObservation ? "Observation available" : "Awaiting farm data"}</span><strong>{farm?.name || "No farm selected"}</strong><small>{farm ? `${farm.district} district` : "Add a farm to get local readings."}</small><small>{latestObservation?.date ? `Observed ${latestObservation.date}` : "NASA POWER historical data"}</small></div>
-        </div>
-        <div className="dashboard-condition-list">
-          <Condition icon={<Droplets size={14} />} label="Rainfall" value={latest?.PRECTOTCORR ? `${latest.PRECTOTCORR.value.toFixed(1)} mm` : "No reading"} />
-          <Condition icon={<Activity size={14} />} label="Humidity" value={latest?.RH2M ? `${latest.RH2M.value.toFixed(0)}%` : "No reading"} />
-          <Condition icon={<Sun size={14} />} label="Solar radiation" value={latest?.ALLSKY_SFC_SW_DWN ? `${latest.ALLSKY_SFC_SW_DWN.value.toFixed(1)} kWh/m²` : "No reading"} />
-        </div>
-        <div className="dashboard-data-note">Historical observations · not a forecast or soil test</div>
-      </section>
-
-      <section className="panel dashboard-map-panel">
-        <div className="panel-heading"><div><h3>Field monitoring</h3><p>Registered farm locations</p></div><button className="subtle-button" onClick={() => go("map")}>Open map <ChevronRight size={14} /></button></div>
-        <div className="dashboard-map-area">
-          <FarmMap farms={farms} compact />
-          {!farms.length && <div className="map-empty-overlay"><span className="empty-icon"><MapPin size={18} /></span><strong>No farm locations yet</strong><span>Add coordinates to see your farms here.</span><button className="button button-secondary button-small" onClick={() => go("farms")}><Plus size={14} /> Add a farm</button></div>}
-          {farms.length > 0 && <div className="map-location-tag"><MapPin size={13} /><span>{farms.length} registered location{farms.length === 1 ? "" : "s"}</span></div>}
-        </div>
-        <div className="map-legend"><span className="map-pip" /> Farm locations <span className="map-count">{farm?.district || "Uganda"}</span></div>
-      </section>
-
-      <div className="dashboard-right-stack">
-        <section className="panel dashboard-weather-panel">
-          <div className="panel-heading"><div><h3>Current weather</h3><p>{current ? `${current.condition} · ${liveWeather?.farm.district}` : "Model-based conditions at your farm"}</p></div><CloudSun size={17} className="panel-heading-icon" /></div>
-          {liveWeatherError && <InlineNotice message={liveWeatherError} />}
-          {current ? <>
-            <div className="weather-reading-grid dashboard-live-grid">
-              <div className="weather-reading weather-temperature"><Thermometer size={15} /><span>Temperature</span><strong>{current.temperature_c === null ? "—" : `${current.temperature_c.toFixed(1)}°C`}</strong></div>
-              <div className="weather-reading"><Droplets size={15} /><span>Precipitation</span><strong>{current.precipitation_mm === null ? "—" : `${current.precipitation_mm.toFixed(1)} mm`}</strong></div>
-              <div className="weather-reading"><Activity size={15} /><span>Humidity</span><strong>{current.relative_humidity_pct === null ? "—" : `${current.relative_humidity_pct.toFixed(0)}%`}</strong></div>
-              <div className="weather-reading"><Wind size={15} /><span>Wind</span><strong>{current.wind_speed_kmh === null ? "—" : `${current.wind_speed_kmh.toFixed(0)} km/h`}</strong></div>
-            </div>
-            <div className="dashboard-data-note">Modelled conditions · refreshes every 15 minutes · {current.time.replace("T", " ")} local time · <a href={liveWeather.attribution_url} target="_blank" rel="noreferrer">Open-Meteo</a></div>
-          </> : !liveWeatherError && <div className="live-weather-empty">{loading ? "Loading current conditions…" : farms.length ? "Current weather is not available right now." : "Add a farm to see local weather."}</div>}
-        </section>
-
-        <section className="panel dashboard-soil-panel">
-          <div className="panel-heading"><div><h3>Farm profile</h3><p>{farm?.name || "Saved field details"}</p></div><Sprout size={17} className="panel-heading-icon" /></div>
-          {farm ? <><div className="soil-profile-grid"><div><span>Soil type</span><strong>{farm.soil_type.replace(/_/g, " ") || "Not recorded"}</strong></div><div><span>Main crop</span><strong>{farm.crop || "Not recorded"}</strong></div></div><div className="soil-profile-foot"><span>{farm.size_hectares} ha · {farm.district}</span><button className="subtle-button" onClick={() => go("farms")}>Manage <ChevronRight size={13} /></button></div><p className="soil-profile-note">Farmer-recorded details; no sensor-based soil test is connected.</p></> : <div className="soil-empty"><Sprout size={20} /><strong>No farm profile yet</strong><span>Add a farm to record its soil and crop details.</span><button className="subtle-button" onClick={() => go("farms")}>Add farm <ChevronRight size={13} /></button></div>}
-        </section>
+  return <div className="reference-dashboard">
+    <section className="farm-hero">
+      <img className="farm-hero-art" src="/farm-hero.svg" alt="Illustrated green farms and hills in Uganda" />
+      <div className="farm-hero-shade" />
+      <div className="farm-hero-copy">
+        <span className="farm-hero-kicker"><Leaf size={14} /> FARM INTELLIGENCE FOR UGANDA</span>
+        <h1>Smart agriculture for a<br /><em>productive Uganda</em></h1>
+        <p>Good decisions start with the right farm information. Your fields, weather, and farming tools are together in one place.</p>
+        <button className="farm-hero-button" onClick={() => go("farms")}>Explore your farms <ChevronRight size={16} /></button>
       </div>
-
-      <section className="panel dashboard-actions-panel">
-        <div className="panel-heading"><div><h3>Recommended next steps</h3><p>Actions based on your workspace</p></div></div>
-        <div className="dashboard-action-list">{actions.map((action) => <button className="dashboard-action" key={action.title} onClick={() => go(action.page)}><span className="dashboard-action-icon">{action.icon}</span><span className="dashboard-action-copy"><strong>{action.title}</strong><small>{action.detail}</small></span><ChevronRight size={15} /></button>)}</div>
-      </section>
-
-      <section className="panel dashboard-trend-panel">
-        <div className="panel-heading"><div><h3>Climate trend</h3><p>{weather ? `${weather.period.start} – ${weather.period.end} · historical observations` : "Rainfall and temperature at your farm"}</p></div><button className="subtle-button" onClick={() => go("weather")}>Details <ChevronRight size={13} /></button></div>
-        {weatherError && <InlineNotice message={weatherError} />}
-        {chartData.length ? <ClimateChart data={chartData} /> : <EmptyState loading={loading} title={farms.length ? "Climate data unavailable" : "No observations yet"} text={farms.length ? "Historical observations could not be loaded. Try the weather page again." : "Add a farm to retrieve location-specific NASA POWER observations."} />}
-        <div className="chart-legend"><span><i className="legend-rain" /> Rainfall <small>mm/day</small></span><span><i className="legend-temp" /> Temperature <small>°C</small></span><span className="source-label"><span className="source-dot" /> Observed · not forecast</span></div>
-        {rainfall !== null && <div className="trend-total">Rainfall total in period <strong>{rainfall.toFixed(1)} mm</strong></div>}
-      </section>
-
-      <section className="panel dashboard-crops-panel">
-        <div className="panel-heading"><div><h3>Crop distribution</h3><p>Registered farms by reported crop</p></div><button className="more-btn" aria-label="View farm reports" onClick={() => go("analytics")}><Ellipsis size={18} /></button></div>
-        {cropData.length ? <CropDistributionChart data={cropData} /> : <EmptyState loading={loading} title="No crop records yet" text="Add crop details to your farms to build this view." />}
-        <button className="outlook-link" onClick={() => go("analytics")}>View reports <ChevronRight size={14} /></button>
-      </section>
+      <div className="farm-network-card"><span className="farm-network-leaf"><Leaf size={17} /></span><strong>Your farm network</strong><div><b>{farms.length}</b><span>{farms.length === 1 ? "registered farm" : "registered farms"}</span></div><small>{farms[0]?.district || "Add a farm to get started"}</small></div>
     </section>
-  </>;
-}
 
-const cropChartColors = ["#16a34a", "#84cc16", "#0ea5e9", "#f59e0b", "#8b5cf6", "#ec4899"];
+    <section className="reference-metric-grid" aria-label="Farm overview">
+      {metrics.map((metric) => <article className={`reference-metric ${metric.tone}`} key={metric.label}><span className="reference-metric-icon">{metric.icon}</span><span className="reference-metric-copy"><small>{metric.label}</small><strong>{metric.value}</strong><em>{metric.note}</em></span><ChevronRight className="reference-metric-arrow" size={17} /></article>)}
+    </section>
 
-function OfflineLibrary({ snapshot, farms }: { snapshot: CachedWorkspace | null; farms: Farm[] }) {
-  const savedFarms = snapshot?.farms ?? farms;
-  const savedAt = snapshot?.savedAt ? new Date(snapshot.savedAt).toLocaleString() : "Previously saved on this device";
-  return <section className="panel offline-library"><div className="offline-library-heading"><span><WifiOff size={18} /></span><div><strong>Offline farm records</strong><p>Saved information from this device · last saved {savedAt}</p></div><span className="offline-readonly">Live weather, AI responses, market feeds and map tiles need internet</span></div><div className="offline-record-grid"><article><h3><Tractor size={14} /> Farm profiles</h3>{savedFarms.length ? savedFarms.map((farm) => <div className="offline-record" key={farm.id}><strong>{farm.name}</strong><small>{farm.district} · {farm.crop || "Crop not recorded"} · {farm.size_hectares} ha · {farm.soil_type.replace(/_/g, " ")}</small></div>) : <small>No saved farm profiles on this device.</small>}</article><article><h3><Sprout size={14} /> Planting plans</h3>{snapshot?.recommendations.length ? snapshot.recommendations.slice(0, 4).map((item) => <div className="offline-record" key={item.id}><strong>{item.crop}</strong><small>{item.guidance}</small></div>) : <small>No saved recommendations on this device.</small>}</article><article><h3><Activity size={14} /> Harvest activity</h3>{snapshot?.harvests.length ? snapshot.harvests.slice(0, 5).map((item) => <div className="offline-record" key={item.id}><strong>{item.crop} · {Number(item.quantity_kg).toLocaleString()} kg</strong><small>{item.farm_name} · {item.harvest_date}</small></div>) : <small>No saved harvest records on this device.</small>}</article><article><h3><BookOpen size={14} /> Saved crop guides</h3>{snapshot?.crops.filter((crop) => crop.active && crop.verified).length ? snapshot.crops.filter((crop) => crop.active && crop.verified).slice(0, 5).map((crop) => <div className="offline-record" key={crop.id}><strong>{crop.name}</strong><small>{crop.guidance_notes || crop.source_title || "No saved guidance text"}</small></div>) : <small>No verified crop guides are cached yet.</small>}</article></div></section>;
-}
+    <section className="dashboard-feature-row">
+      <article className="intelligence-card">
+        <div className="intelligence-glow" /><div className="intelligence-heading"><span><Sprout size={19} /></span><div><strong>Today's farm intelligence</strong><small>{dateLabel}</small></div><span className="intelligence-badge"><span /> Data powered</span></div>
+        {recentRecommendation ? <div className="intelligence-content"><div className="intelligence-plant"><Sprout size={44} /></div><div><span className="intelligence-kicker">SAVED PLANTING PLAN</span><h3>{recentRecommendation.crop} guidance is ready</h3><p>{recentRecommendation.guidance}</p><button onClick={() => go("advisor")}>View planting advice <ChevronRight size={14} /></button></div></div> : <div className="intelligence-content"><div className="intelligence-plant"><Sprout size={44} /></div><div><span className="intelligence-kicker">YOUR NEXT STEP</span><h3>{farms.length ? "Build a plan for your crops" : "Start with your first farm"}</h3><p>{farms.length ? "Open the planting advisor for practical guidance based on your farm and available climate observations." : "Register your farm and crop details to unlock local weather and planting guidance."}</p><button onClick={() => go(farms.length ? "advisor" : "farms")}>{farms.length ? "Open planting advisor" : "Add your farm"} <ChevronRight size={14} /></button></div></div>}
+      </article>
 
-function CropDistributionChart({ data }: { data: { crop: string; count: number }[] }) {
-  const total = data.reduce((sum, item) => sum + item.count, 0);
-  return <div className="crop-chart-layout">
-    <div className="crop-chart-visual">
-      <ResponsiveContainer width="100%" height="100%"><PieChart>
-        <Pie data={data} dataKey="count" nameKey="crop" innerRadius="61%" outerRadius="83%" paddingAngle={2} stroke="none">
-          {data.map((item, index) => <Cell key={item.crop} fill={cropChartColors[index % cropChartColors.length]} />)}
-        </Pie>
-        <Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 9, color: "#111827", fontSize: 10 }} formatter={(value: number) => [`${value} farm${value === 1 ? "" : "s"}`, "Recorded"]} />
-      </PieChart></ResponsiveContainer>
-      <div className="crop-chart-total"><strong>{total}</strong><span>farms</span></div>
-    </div>
-    <div className="crop-chart-legend">{data.slice(0, 5).map((item, index) => <div key={item.crop}><span><i style={{ backgroundColor: cropChartColors[index % cropChartColors.length] }} />{item.crop}</span><strong>{item.count}</strong></div>)}</div>
+      <article className="reference-weather-card">
+        <div className="reference-card-heading"><span><CloudSun size={18} /></span><div><strong>Current weather</strong><small>{liveWeather?.farm.district || farms[0]?.district || "Your farm location"}</small></div>{current && <span className="live-weather-tag"><i /> Live</span>}</div>
+        {liveWeatherError && <InlineNotice message={liveWeatherError} />}
+        {current ? <><div className="reference-current-weather"><span className="weather-sun-art"><CloudSun size={51} /></span><div className="reference-temp"><strong>{current.temperature_c == null ? "--" : `${Math.round(current.temperature_c)} C`}</strong><span>{current.condition}</span></div><div className="reference-weather-facts"><span><small>Humidity</small><b>{current.relative_humidity_pct == null ? "--" : `${current.relative_humidity_pct}%`}</b></span><span><small>Rainfall</small><b>{current.precipitation_mm == null ? "--" : `${current.precipitation_mm.toFixed(1)} mm`}</b></span><span><small>Wind</small><b>{current.wind_speed_kmh == null ? "--" : `${current.wind_speed_kmh} km/h`}</b></span></div></div><div className="reference-forecast">{liveWeather?.daily_forecast.slice(0, 5).map((day) => <div key={day.date}><small>{new Intl.DateTimeFormat("en-UG", { weekday: "short" }).format(new Date(`${day.date}T12:00:00`))}</small><CloudSun size={18} /><b>{day.temperature_max_c == null ? "--" : `${Math.round(day.temperature_max_c)} C`}</b><span>{day.precipitation_probability_max_pct == null ? "--" : `${Math.round(day.precipitation_probability_max_pct)}% rain`}</span></div>)}</div></> : <div className="reference-empty-weather"><span><CloudSun size={27} /></span><strong>{farms.length ? "Weather is not available right now" : "Add a farm to see local weather"}</strong><p>{farms.length ? liveWeatherError || "Live weather needs an internet connection and valid farm coordinates." : "Weather is based on your saved farm location."}</p>{!farms.length && <button onClick={() => go("farms")}>Register a farm</button>}</div>}
+      </article>
+    </section>
+
+    <section className="dashboard-lower-grid">
+      <article className="reference-panel reference-analytics"><div className="reference-card-heading"><span><BarChart3 size={18} /></span><div><strong>Farm analytics</strong><small>{weather ? `${weather.period.start} to ${weather.period.end} ? observed climate` : "Your farm data, at a glance"}</small></div><button className="reference-view-link" onClick={() => go("analytics")}>Reports <ChevronRight size={13} /></button></div>{weatherError && <InlineNotice message={weatherError} />}{chartData.length ? <><ClimateChart data={chartData} /><div className="reference-chart-legend"><span><i className="reference-rain-key" /> Rainfall</span><span><i className="reference-temp-key" /> Temperature</span><span className="reference-chart-source">NASA POWER observations</span></div></> : <EmptyState loading={loading} title={farms.length ? "Climate analytics unavailable" : "Your farm analytics will appear here"} text={farms.length ? "Try again when historical observations are available." : "Add a farm with coordinates to load location-specific climate records."} action={!farms.length ? <button className="button button-secondary button-small" onClick={() => go("farms")}>Add a farm</button> : undefined} />}</article>
+
+      <article className="reference-panel reference-map-panel"><div className="reference-card-heading"><span><MapPin size={18} /></span><div><strong>Your farm map</strong><small>{farms.length ? `${farms.length} saved location${farms.length === 1 ? "" : "s"}` : "Registered farm locations"}</small></div><button className="reference-view-link" onClick={() => go("map")}>View all <ChevronRight size={13} /></button></div>{farms.length ? <div className="reference-map"><FarmMap farms={farms} compact /></div> : <div className="reference-map-empty"><MapPin size={28} /><strong>No farm locations yet</strong><span>Save coordinates to view your fields on the map.</span><button onClick={() => go("farms")}>Add a farm <ChevronRight size={13} /></button></div>}</article>
+
+      <div className="reference-side-stack">
+        <article className="reference-panel reference-activities"><div className="reference-card-heading"><span><CalendarDays size={17} /></span><div><strong>Recent farm alerts</strong><small>Updates linked to your farms</small></div><button className="reference-view-link" onClick={() => go("alerts")}>View all <ChevronRight size={13} /></button></div>{recentAlerts.length ? <div className="reference-alert-list">{recentAlerts.map((item) => <button key={item.id} onClick={() => go("alerts")}><span className={`reference-alert-icon ${item.level}`}><ShieldAlert size={16} /></span><span><strong>{item.title}</strong><small>{item.message}</small><em>{new Date(item.created_at).toLocaleString("en-UG", { weekday: "short", hour: "numeric", minute: "2-digit" })}</em></span><ChevronRight size={15} /></button>)}</div> : <div className="reference-no-alerts"><Check size={17} /><span><strong>{loading ? "Checking for updates" : "No recent alerts"}</strong><small>New farm notifications will appear here.</small></span></div>}</article>
+        <article className="reference-ai-card"><span className="reference-ai-icon"><Sprout size={21} /></span><span><strong>Ask AgriCloud AI</strong><small>Get farming guidance from your assistant</small></span><button aria-label="Open AI assistant" onClick={() => go("assistant")}><ChevronRight size={17} /></button></article>
+        <article className="reference-crop-summary"><span><Leaf size={16} /></span><strong>{cropData.length ? `${cropData.length} crop types in your farms` : "Your crop summary"}</strong><button onClick={() => go("farms")}>Manage crops <ChevronRight size={13} /></button></article>
+      </div>
+    </section>
   </div>;
 }
 
@@ -572,50 +402,8 @@ function AdminPage({ user, farms, go }: { user: User; farms: Farm[]; go: (page: 
   </>;
 }
 
-function OnboardingPage({ user, farms, onComplete }: { user: User; farms: Farm[]; onComplete: (user: User) => void }) {
-  const { setLanguage, t } = useLanguage();
-  const [step, setStep] = useState(Math.min(2, Math.max(0, user.onboarding_step)));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [profile, setProfile] = useState({ preferred_language: user.preferred_language, district: user.district, farming_method: user.farming_method, irrigation_method: user.irrigation_method, farming_experience_years: user.farming_experience_years?.toString() ?? "", farming_interests: user.farming_interests.join(", "), farming_goals: user.farming_goals, preferred_notifications: user.preferred_notifications, personalize_assistant: user.personalize_assistant });
-  const [farm, setFarm] = useState({ name: farms[0]?.name ?? "", district: farms[0]?.district ?? user.district, crop: farms[0]?.crop ?? "", size_hectares: farms[0]?.size_hectares ?? "", latitude: farms[0]?.latitude ?? "", longitude: farms[0]?.longitude ?? "", soil_type: farms[0]?.soil_type ?? "unknown" });
-  async function saveStep(next: number) {
-    setBusy(true); setError("");
-    try {
-      const updated = await api<User>("/auth/me/", { method: "PATCH", body: JSON.stringify({ preferred_language: profile.preferred_language, district: profile.district, ...(step >= 1 ? { farming_method: profile.farming_method, irrigation_method: profile.irrigation_method, farming_experience_years: profile.farming_experience_years || null, farming_interests: profile.farming_interests.split(",").map((item) => item.trim()).filter(Boolean), farming_goals: profile.farming_goals, preferred_notifications: profile.preferred_notifications, personalize_assistant: profile.personalize_assistant } : {}), onboarding_step: next }) });
-      setLanguage(updated.preferred_language); setStep(next);
-    } catch (err) { setError(err instanceof Error ? err.message : "Your progress could not be saved. Try again when connected."); }
-    finally { setBusy(false); }
-  }
-  async function finish(skipFarm = false) {
-    setBusy(true); setError("");
-    try {
-      if (!skipFarm && farm.name.trim()) {
-        if (!farm.latitude || !farm.longitude || !farm.size_hectares || !farm.district.trim()) throw new Error("Add the farm district, area, and coordinates, or skip adding a farm for now.");
-        const currentFarms = await api<Farm[]>("/farms/");
-        const alreadyAdded = currentFarms.some((item) => item.name.trim().toLowerCase() === farm.name.trim().toLowerCase() && item.district.toLowerCase() === farm.district.toLowerCase());
-        if (!alreadyAdded) await api<Farm>("/farms/", { method: "POST", body: JSON.stringify({ ...farm, name: farm.name.trim(), district: farm.district.trim() }) });
-      }
-      const updated = await api<User>("/auth/me/", { method: "PATCH", body: JSON.stringify({ preferred_language: profile.preferred_language, district: profile.district, farming_method: profile.farming_method, irrigation_method: profile.irrigation_method, farming_experience_years: profile.farming_experience_years || null, farming_interests: profile.farming_interests.split(",").map((item) => item.trim()).filter(Boolean), farming_goals: profile.farming_goals, preferred_notifications: profile.preferred_notifications, personalize_assistant: profile.personalize_assistant, onboarding_completed: true, onboarding_step: 0 }) });
-      setLanguage(updated.preferred_language); onComplete(updated);
-    } catch (err) { setError(err instanceof Error ? err.message : "Setup could not be completed. Your saved progress is still here."); }
-    finally { setBusy(false); }
-  }
-  return <main className="onboarding-screen"><header className="onboarding-brand"><span className="brand-mark"><Leaf size={18} fill="currentColor" /></span>agricloud<span className="brand-ai">.ai</span><span className="onboarding-step-count">{step + 1} / 3</span></header><div className="onboarding-progress"><i style={{ width: `${((step + 1) / 3) * 100}%` }} /></div><section className="onboarding-card"><div className="eyebrow">YOUR FARMER WORKSPACE</div><h1>{step === 0 ? t("onboarding") : step === 1 ? "Your farming preferences" : "Add your first farm"}</h1><p className="onboarding-intro">{step === 0 ? "Choose a language and district. You can change these details later." : step === 1 ? "A few optional details help tailor your workspace and farming support." : "Farm details are optional. Coordinates enable local weather and map features."}</p>
-    {error && <InlineNotice message={error} />}
-    {step === 0 && <div className="onboarding-fields"><label>{t("language")}<select value={profile.preferred_language} onChange={(event) => setProfile({ ...profile, preferred_language: event.target.value as User["preferred_language"] })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.code === "te" ? "Ateso · interface in English; voice support varies" : item.name}</option>)}</select></label><label>Your district <span className="optional">(optional)</span><input value={profile.district} onChange={(event) => setProfile({ ...profile, district: event.target.value })} placeholder="e.g. Wakiso" /></label></div>}
-    {step === 1 && <div className="onboarding-fields"><label>Farming method <span className="optional">(optional)</span><select value={profile.farming_method} onChange={(event) => setProfile({ ...profile, farming_method: event.target.value })}><option value="">Choose if you like</option><option>Mixed farming</option><option>Smallholder</option><option>Agroforestry</option><option>Organic</option><option>Conventional</option><option>Other</option></select></label><label>Irrigation method <span className="optional">(optional)</span><select value={profile.irrigation_method} onChange={(event) => setProfile({ ...profile, irrigation_method: event.target.value })}><option value="">Rain-fed / not specified</option><option>Drip</option><option>Sprinkler</option><option>Furrow</option><option>Manual watering</option><option>Other</option></select></label><label>Years farming <span className="optional">(optional)</span><input type="number" min="0" max="100" value={profile.farming_experience_years} onChange={(event) => setProfile({ ...profile, farming_experience_years: event.target.value })} /></label><label>Farming interests <span className="optional">(comma separated)</span><input value={profile.farming_interests} onChange={(event) => setProfile({ ...profile, farming_interests: event.target.value })} placeholder="Soil health, markets, irrigation" /></label><label>What would you like to achieve? <span className="optional">(optional)</span><textarea rows={3} maxLength={1000} value={profile.farming_goals} onChange={(event) => setProfile({ ...profile, farming_goals: event.target.value })} placeholder="Your goals for the coming season" /></label><label className="onboarding-check"><input type="checkbox" checked={profile.preferred_notifications} onChange={(event) => setProfile({ ...profile, preferred_notifications: event.target.checked })} /> Receive farm notifications in AgriCloud</label><label className="onboarding-check"><input type="checkbox" checked={profile.personalize_assistant} onChange={(event) => setProfile({ ...profile, personalize_assistant: event.target.checked })} /> Allow my district and farming preferences to personalize AI assistant replies</label></div>}
-    {step === 2 && <div className="onboarding-fields"><label>Farm name <span className="optional">(optional)</span><input value={farm.name} onChange={(event) => setFarm({ ...farm, name: event.target.value })} placeholder="e.g. Family farm" /></label><label>District<input value={farm.district} onChange={(event) => setFarm({ ...farm, district: event.target.value })} placeholder="Your farm district" /></label><label>Farm size (hectares)<input type="number" min="0.01" step="0.01" value={farm.size_hectares} onChange={(event) => setFarm({ ...farm, size_hectares: event.target.value })} /></label><label>Main crop <span className="optional">(optional)</span><input value={farm.crop} onChange={(event) => setFarm({ ...farm, crop: event.target.value })} placeholder="e.g. beans" /></label><label>Latitude <span className="optional">(needed for local weather)</span><input type="number" min="-90" max="90" step="any" value={farm.latitude} onChange={(event) => setFarm({ ...farm, latitude: event.target.value })} placeholder="e.g. 0.3476" /></label><label>Longitude<input type="number" min="-180" max="180" step="any" value={farm.longitude} onChange={(event) => setFarm({ ...farm, longitude: event.target.value })} placeholder="e.g. 32.5825" /></label><label>Soil type <span className="optional">(if known)</span><select value={farm.soil_type} onChange={(event) => setFarm({ ...farm, soil_type: event.target.value })}><option value="unknown">Not sure</option><option value="clay">Clay</option><option value="loam">Loam</option><option value="sandy">Sandy</option><option value="volcanic">Volcanic</option></select></label></div>}
-    <div className="onboarding-actions">{step > 0 && <button className="button button-secondary" disabled={busy} onClick={() => void saveStep(step - 1)}>{t("back")}</button>}{step < 2 ? <><button className="text-button" disabled={busy} onClick={() => void saveStep(step + 1)}>{t("skip")}</button><button className="button button-primary" disabled={busy} onClick={() => void saveStep(step + 1)}>{busy ? "Saving…" : t("next")} <ChevronRight size={15} /></button></> : <><button className="text-button" disabled={busy} onClick={() => void finish(true)}>{t("skip")}</button><button className="button button-primary" disabled={busy} onClick={() => void finish()}>{busy ? "Saving…" : t("finish")} <Check size={15} /></button></>}</div>
-    <div className="onboarding-privacy"><ShieldAlert size={14} /> Farm location is optional. It is used only for the local weather and field tools you choose to use.</div></section></main>;
-}
-
 function MetricCard({ icon, label, value, note, tone }: { icon: ReactNode; label: string; value: ReactNode; note: string; tone: string }) {
   return <div className="metric-card"><div className="metric-top"><span className={`metric-icon ${tone}`}>{icon}</span><button className="more-btn" aria-label={`${label} options`}><Ellipsis size={17} /></button></div><div className="metric-label">{label}</div><div className="metric-value">{value}</div><div className="metric-note">{note}</div></div>;
-}
-
-function Condition({ icon, label, value }: { icon: ReactNode; label: string; value: string }) {
-  return <div className="condition-row"><span className="condition-label">{icon}{label}</span><strong>{value}</strong></div>;
 }
 
 function ClimateChart({ data }: { data: { date: string; rain: number | null; temp: number | null }[] }) {
@@ -919,54 +707,13 @@ function FarmMap({ farms, compact = false }: { farms: Farm[]; compact?: boolean 
   </MapContainer>;
 }
 
-type BrowserSpeechRecognition = {
-  lang: string; continuous: boolean; interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<ArrayLike<{ transcript: string }>> }) => void) | null;
-  onerror: ((event: { error: string }) => void) | null; onend: (() => void) | null;
-  start: () => void; stop: () => void;
-};
-type SpeechWindow = Window & { SpeechRecognition?: new () => BrowserSpeechRecognition; webkitSpeechRecognition?: new () => BrowserSpeechRecognition };
-
 function AssistantPage({ user, farms, onAskExtension }: { user: User; farms: Farm[]; onAskExtension: () => void }) {
-  const { language, t } = useLanguage();
   const [question, setQuestion] = useState("");
   const [messages, setMessages] = useState<{ role: "user" | "assistant"; text: string; sources?: string[]; grounded?: boolean }[]>([
     { role: "assistant", text: "Ask a farming question or follow up naturally. I'll use verified sources when available and clearly label general guidance when they aren't. Your saved farm and account details are not sent to the AI provider." },
   ]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [voiceMode, setVoiceMode] = useState(true);
-  const [listening, setListening] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const recognition = useRef<BrowserSpeechRecognition | null>(null);
-  useEffect(() => () => { recognition.current?.stop(); window.speechSynthesis?.cancel(); }, []);
-  function startVoiceInput() {
-    const SpeechRecognition = (window as SpeechWindow).SpeechRecognition ?? (window as SpeechWindow).webkitSpeechRecognition;
-    if (!SpeechRecognition) { setError(t("voiceUnsupported")); return; }
-    setError("");
-    try {
-      const engine = new SpeechRecognition();
-      engine.lang = languages.find((item) => item.code === language)?.speech ?? "en-UG";
-      engine.continuous = false; engine.interimResults = false;
-      engine.onresult = (event) => { const transcript = Array.from(event.results).map((result) => result[0]?.transcript ?? "").join(" ").trim(); if (transcript) setQuestion((current) => `${current}${current ? " " : ""}${transcript}`); };
-      engine.onerror = (event) => { setError(event.error === "not-allowed" || event.error === "service-not-allowed" ? "Microphone access was blocked. Allow microphone access in browser settings and try again." : event.error === "language-not-supported" ? "Speech recognition for this language is not available on this device. You can type your question instead." : "We couldn't hear that clearly. Try again or type your question."); setListening(false); };
-      engine.onend = () => setListening(false);
-      recognition.current?.stop(); recognition.current = engine; engine.start(); setListening(true);
-    } catch { setListening(false); setError("The microphone could not start. Check your browser permission and try again."); }
-  }
-  function speakAnswer(text: string) {
-    if (!window.speechSynthesis) { setError("Text to speech is not available in this browser."); return; }
-    const speechLanguage = languages.find((item) => item.code === language)?.speech ?? "en-UG";
-    const baseLanguage = speechLanguage.split("-")[0].toLowerCase();
-    const availableVoices = window.speechSynthesis.getVoices();
-    const voice = availableVoices.find((item) => item.lang.toLowerCase().startsWith(baseLanguage));
-    if (!voice) { setError(`This browser has no speech voice for ${languages.find((item) => item.code === language)?.name ?? "this language"}. You can still read the answer.`); return; }
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.lang = speechLanguage; utterance.voice = voice;
-    utterance.onstart = () => setSpeaking(true); utterance.onend = () => setSpeaking(false); utterance.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utterance);
-  }
   async function send(event: FormEvent) {
     event.preventDefault();
     if (!question.trim()) return;
@@ -979,7 +726,7 @@ function AssistantPage({ user, farms, onAskExtension }: { user: User; farms: Far
     try {
       const reply = await api<{ answer: string; sources: string[]; grounded: boolean }>("/assistant/chat/", {
         method: "POST",
-        body: JSON.stringify({ message: asked, history, language }),
+        body: JSON.stringify({ message: asked, history }),
       });
       setMessages((items) => [...items, { role: "assistant", text: reply.answer, sources: reply.sources, grounded: reply.grounded }]);
     } catch (err) {
@@ -988,7 +735,7 @@ function AssistantPage({ user, farms, onAskExtension }: { user: User; farms: Far
       setMessages((items) => [...items, { role: "assistant", text: "I couldn't reach the assistant right now. Please try again later or check with your local extension worker." }]);
     } finally { setBusy(false); }
   }
-  return <><PageHeading eyebrow="FARMING SUPPORT" title="AI farming assistant" description="Chat naturally, ask follow-up questions, and get clear notes when an answer isn't backed by a verified local source." /><div className="assistant-layout"><section className="panel chat-panel"><div className="chat-header"><div className="assistant-avatar"><Sprout size={18} /></div><div><strong>AgriCloud field assistant</strong><span><i /> Sources when available</span></div><button className={`voice-mode-switch ${voiceMode ? "voice-active" : ""}`} onClick={() => { setVoiceMode((active) => !active); if (voiceMode) { recognition.current?.stop(); window.speechSynthesis?.cancel(); } }} aria-pressed={voiceMode}>{voiceMode ? "Voice · " + languages.find((item) => item.code === language)?.name : "Text only"}</button></div><div className="chat-messages">{messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><span className="chat-avatar">{message.role === "assistant" ? <Sprout size={14} /> : "You"}</span><div><p>{message.text}</p>{message.role === "assistant" && voiceMode && <button type="button" className="speak-answer" onClick={() => speaking ? window.speechSynthesis.cancel() : speakAnswer(message.text)}>{speaking ? <Activity size={13} /> : <Volume2 size={13} />}{speaking ? t("stopSpeaking") : t("listen")}</button>}{message.sources?.length ? <div className="chat-sources">Sources: {message.sources.join(" · ")}</div> : message.role === "assistant" && message.grounded === false ? <div className="chat-sources chat-unsourced">No verified source matched · general guidance, not locally verified.</div> : null}</div></div>)}{busy && <div className="chat-loading"><span className="spinner small" /> Thinking…</div>}</div>{error && <div className="chat-error"><ShieldAlert size={13} />{error}</div>}<form className="chat-input" onSubmit={(event) => void send(event)}>{voiceMode && <button className={`voice-input-btn ${listening ? "is-listening" : ""}`} type="button" onClick={() => listening ? recognition.current?.stop() : startVoiceInput()} aria-label={t("voiceInput")} title={t("voiceInput")}><Mic size={17} /></button>}<input aria-label="Ask a farming question" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask about crops, planting, or soil…" /><button className="button button-primary" disabled={!question.trim() || busy}>Send <ChevronRight size={15} /></button></form><div className="chat-safety"><ShieldAlert size={13} /> Your message goes to the configured AI provider. Do not include personal or sensitive details; saved farm and account data are never sent.</div></section><aside className="panel assistant-context"><h3>Your farm context</h3><p>Farm records remain private to your workspace.</p>{farms.length ? farms.map((farm) => <div className="context-row" key={farm.id}><span className="farm-glyph glyph-0"><Leaf size={16} /></span><div><strong>{farm.name}</strong><small>{farm.district} · {farm.crop || "Crop not specified"}</small></div></div>) : <div className="context-empty">Register a farm to see your local context in this workspace.</div>}<div className="context-note"><strong>Personalized support</strong><span>{user.preferred_language.toUpperCase()} · {user.farming_method || "Farming method not set"}{user.farming_goals ? ` · ${user.farming_goals}` : ""}</span></div>{user.role === "farmer" && <button className="outlook-link extension-link" onClick={onAskExtension}>Ask an extension worker <ChevronRight size={14} /></button>}</aside></div></>;
+  return <><PageHeading eyebrow="FARMING SUPPORT" title="AI farming assistant" description="Chat naturally, ask follow-up questions, and get clear notes when an answer isn't backed by a verified local source." /><div className="assistant-layout"><section className="panel chat-panel"><div className="chat-header"><div className="assistant-avatar"><Sprout size={18} /></div><div><strong>AgriCloud field assistant</strong><span><i /> Sources when available</span></div><span className="status-pill">Conversational support</span></div><div className="chat-messages">{messages.map((message, index) => <div key={index} className={`chat-message ${message.role}`}><span className="chat-avatar">{message.role === "assistant" ? <Sprout size={14} /> : "You"}</span><div><p>{message.text}</p>{message.sources?.length ? <div className="chat-sources">Sources: {message.sources.join(" · ")}</div> : message.role === "assistant" && message.grounded === false ? <div className="chat-sources chat-unsourced">No verified source matched · general guidance, not locally verified.</div> : null}</div></div>)}{busy && <div className="chat-loading"><span className="spinner small" /> Thinking…</div>}</div>{error && <div className="chat-error"><ShieldAlert size={13} />{error}</div>}<form className="chat-input" onSubmit={(event) => void send(event)}><input aria-label="Ask a farming question" value={question} onChange={(e) => setQuestion(e.target.value)} placeholder="Ask about crops, planting, or soil…" /><button className="button button-primary" disabled={!question.trim() || busy}>Send <ChevronRight size={15} /></button></form><div className="chat-safety"><ShieldAlert size={13} /> Your message goes to the configured AI provider. Do not include personal or sensitive details; saved farm and account data are never sent.</div></section><aside className="panel assistant-context"><h3>Your farm context</h3><p>Farm records remain private to your workspace.</p>{farms.length ? farms.map((farm) => <div className="context-row" key={farm.id}><span className="farm-glyph glyph-0"><Leaf size={16} /></span><div><strong>{farm.name}</strong><small>{farm.district} · {farm.crop || "Crop not specified"}</small></div></div>) : <div className="context-empty">Register a farm to see your local context in this workspace.</div>}<div className="context-note"><strong>Language support</strong><span>English interface. Luganda and other local languages should be enabled with validated agricultural content.</span></div>{user.role === "farmer" && <button className="outlook-link extension-link" onClick={onAskExtension}>Ask an extension worker <ChevronRight size={14} /></button>}</aside></div></>;
 }
 
 function QuestionsPage({ user, farms }: { user: User; farms: Farm[] }) {
@@ -1114,7 +861,6 @@ function AlertsPage() {
 }
 
 function YieldPage({ farms, user }: { farms: Farm[]; user: User }) {
-  const [pendingHarvests, setPendingHarvests] = useState<PendingHarvest[]>([]);
   const [farmId, setFarmId] = useState<number | "">(farms[0]?.id ?? "");
   const [crop, setCrop] = useState(farms[0]?.crop ?? "");
   const [forecast, setForecast] = useState<YieldForecast | null>(null);
@@ -1127,13 +873,6 @@ function YieldPage({ farms, user }: { farms: Farm[]; user: User }) {
   const [quantity, setQuantity] = useState("");
   const selectedFarm = farms.find((farm) => farm.id === Number(farmId));
   const canRecordHarvest = user.role === "farmer" || user.role === "admin";
-
-  async function refreshPending() { setPendingHarvests(await getPendingHarvests(user.id).catch(() => [])); }
-  useEffect(() => {
-    void refreshPending();
-    window.addEventListener("online", refreshPending);
-    return () => window.removeEventListener("online", refreshPending);
-  }, [user.id]);
 
   async function loadForecast(cropName = crop) {
     if (!farmId || !cropName.trim()) return;
@@ -1150,25 +889,15 @@ function YieldPage({ farms, user }: { farms: Farm[]; user: User }) {
 
   async function recordHarvest(event: FormEvent) {
     event.preventDefault(); setBusy(true); setHarvestError(""); setHarvestNotice("");
-    const entry = { farm: Number(farmId), crop: crop.trim(), harvest_date: harvestDate, quantity_kg: quantity, client_key: crypto.randomUUID() };
     try {
-      if (!navigator.onLine) {
-        await queueHarvest(user.id, entry); await refreshPending(); setQuantity("");
-        setHarvestNotice("Saved on this device. It will sync when you reconnect; forecasts update after sync."); return;
-      }
       await api<HarvestRecord>("/harvests/", {
         method: "POST",
-        body: JSON.stringify(entry),
+        body: JSON.stringify({ farm: farmId, crop: crop.trim(), harvest_date: harvestDate, quantity_kg: quantity }),
       });
       setQuantity("");
       setHarvestNotice("Harvest record saved.");
       await loadForecast();
-    } catch (err) {
-      if (err instanceof TypeError) {
-        try { await queueHarvest(user.id, entry); await refreshPending(); setQuantity(""); setHarvestNotice("Connection lost. This harvest is saved on this device and will sync when you reconnect."); }
-        catch (queueError) { setHarvestError(queueError instanceof Error ? queueError.message : "Harvest record could not be saved offline."); }
-      } else setHarvestError(err instanceof Error ? err.message : "Harvest record could not be saved.");
-    }
+    } catch (err) { setHarvestError(err instanceof Error ? err.message : "Harvest record could not be saved."); }
     finally { setBusy(false); }
   }
   const annualData = forecast?.harvest_trend ?? [];
@@ -1181,7 +910,6 @@ function YieldPage({ farms, user }: { farms: Farm[]; user: User }) {
       <button className="button button-primary" disabled={loading || !farmId || !crop.trim()}>{loading ? "Updating estimate…" : "Update forecast"}</button>
     </form>
     {error && <InlineNotice message={error} />}
-    {!!pendingHarvests.length && <section className="panel pending-harvest-panel"><div className="panel-heading"><div><h3>Harvest records waiting to sync</h3><p>Saved on this device. They are not included in forecasts until confirmed by the server.</p></div><span className="admin-count-pill">{pendingHarvests.length} pending</span></div>{pendingHarvests.map((item) => <div className="pending-harvest-row" key={item.id}><span><strong>{item.crop} · {farms.find((farm) => farm.id === item.farm)?.name ?? "Farm"}</strong><small>{item.harvest_date} · {Number(item.quantity_kg).toLocaleString()} kg · {item.issue ? `Needs review: ${item.issue}` : "Waiting for connection"}</small></span><span className={`admin-status ${item.issue ? "is-paused" : "is-active"}`}><i />{item.issue ? "Review" : "Queued"}</span></div>)}</section>}
     {forecast && <>
       {forecast.forecast_available ? <div className="metric-grid yield-metrics">
         <MetricCard icon={<Sprout size={16} />} label="Expected harvest" value={`${forecast.expected_harvest_kg?.toLocaleString() ?? "—"} kg`} note={`${forecast.farm.area_hectares} ha · ${forecast.crop}`} tone="green" />
@@ -1313,16 +1041,15 @@ function AnalyticsPage({ farms }: { farms: Farm[] }) {
   return <><PageHeading eyebrow="WORKSPACE INDICATORS" title="Farm analytics" description="A snapshot of registered farm records and reported crop distribution." /><div className="metric-grid analytics-metrics"><MetricCard icon={<Tractor size={17} />} label="Registered farms" value={analytics?.farm_count ?? "—"} note="Visible in your workspace" tone="green" /><MetricCard icon={<Sprout size={17} />} label="Area recorded" value={analytics ? `${analytics.total_hectares.toLocaleString()} ha` : "—"} note="Reported farm area" tone="lime" /><MetricCard icon={<MapPin size={17} />} label="Districts represented" value={new Set(farms.map((farm) => farm.district)).size} note="Based on saved farm records" tone="blue" /><MetricCard icon={<Activity size={17} />} label="Crop types" value={data.length} note="Crop records entered" tone="orange" /></div>{error && <InlineNotice message={error} />}<div className="panel climate-panel analytics-chart"><div className="panel-heading"><div><h3>Crop distribution</h3><p>Number of registered farms per recorded crop</p></div></div>{data.length ? <div className="chart-wrap"><ResponsiveContainer width="100%" height="100%"><AreaChart data={data}><defs><linearGradient id="cropFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#16a34a" stopOpacity={0.25} /><stop offset="100%" stopColor="#16a34a" stopOpacity={0} /></linearGradient></defs><CartesianGrid stroke="#f3f4f6" vertical={false} /><XAxis dataKey="name" tick={{ fill: "#9ca3af", fontSize: 11 }} tickLine={false} axisLine={false} /><YAxis allowDecimals={false} tick={{ fill: "#9ca3af", fontSize: 11 }} tickLine={false} axisLine={false} /><Tooltip contentStyle={{ background: "#ffffff", border: "1px solid #e5e7eb", borderRadius: 10, color: "#111827" }} /><Area dataKey="farms" type="monotone" stroke="#16a34a" strokeWidth={2} fill="url(#cropFill)" /></AreaChart></ResponsiveContainer></div> : <EmptyState title="Not enough crop records yet" text="Add crop details to farms to build a crop distribution view." />}</div></>;
 }
 
-function ProfilePage({ user, farms, onUpdated }: { user: User; farms: Farm[]; onUpdated: (user: User) => void }) {
-  const { setLanguage, t } = useLanguage();
-  const [form, setForm] = useState({ first_name: user.first_name, last_name: user.last_name, email: user.email, district: user.district, phone: user.phone, preferred_language: user.preferred_language, farming_method: user.farming_method, irrigation_method: user.irrigation_method, farming_experience_years: user.farming_experience_years?.toString() ?? "", farming_interests: user.farming_interests.join(", "), farming_goals: user.farming_goals, preferred_notifications: user.preferred_notifications, personalize_assistant: user.personalize_assistant });
+function ProfilePage({ user, onUpdated }: { user: User; onUpdated: (user: User) => void }) {
+  const [form, setForm] = useState({ first_name: user.first_name, last_name: user.last_name, email: user.email, district: user.district, phone: user.phone });
   const [notice, setNotice] = useState("");
   const [error, setError] = useState("");
   const [photoBusy, setPhotoBusy] = useState(false);
   const photoInput = useRef<HTMLInputElement>(null);
   async function submit(e: FormEvent) {
     e.preventDefault(); setNotice(""); setError("");
-    try { const updated = await api<User>("/auth/me/", { method: "PATCH", body: JSON.stringify({ ...form, farming_experience_years: form.farming_experience_years || null, farming_interests: form.farming_interests.split(",").map((item) => item.trim()).filter(Boolean) }) }); onUpdated(updated); setLanguage(updated.preferred_language); setNotice("Profile saved."); }
+    try { const updated = await api<User>("/auth/me/", { method: "PATCH", body: JSON.stringify(form) }); onUpdated(updated); setNotice("Profile saved."); }
     catch (err) { setError(err instanceof Error ? err.message : "Profile could not be saved."); }
   }
   async function uploadPhoto(file: File) {
@@ -1348,7 +1075,7 @@ function ProfilePage({ user, farms, onUpdated }: { user: User; farms: Farm[]; on
     } catch (err) { setError(err instanceof Error ? err.message : "Profile picture could not be removed."); }
     finally { setPhotoBusy(false); }
   }
-  return <><PageHeading eyebrow="ACCOUNT" title="Profile settings" description="Manage the account information used in your AgriCloud workspace." /><form className="panel profile-form" onSubmit={submit}><div className="profile-intro"><UserAvatar user={user} className="profile-large-avatar" /><div className="profile-identity"><h3>{user.first_name || user.username} {user.last_name}</h3><span>{roleLabel(user.role)} · {user.username}</span><div className="profile-photo-actions"><input ref={photoInput} className="profile-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a profile picture" disabled={photoBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadPhoto(file); event.target.value = ""; }} /><button type="button" className="button button-secondary button-small" disabled={photoBusy} onClick={() => photoInput.current?.click()}>{photoBusy ? "Updating photo…" : user.profile_image ? "Change photo" : "Upload photo"}</button>{user.profile_image && <button type="button" className="text-button profile-remove-photo" disabled={photoBusy} onClick={() => void removePhoto()}>Remove</button>}<small>JPG, PNG or WebP · Up to 5 MB</small></div></div></div><div className="form-grid"><label>{t("language")}<select value={form.preferred_language} onChange={(e) => setForm({ ...form, preferred_language: e.target.value as User["preferred_language"] })}>{languages.map((item) => <option key={item.code} value={item.code}>{item.code === "te" ? "Ateso (interface in English; voice support varies)" : item.name}</option>)}</select></label><label>Farming method<select value={form.farming_method} onChange={(e) => setForm({ ...form, farming_method: e.target.value })}><option value="">Not specified</option><option>Mixed farming</option><option>Smallholder</option><option>Agroforestry</option><option>Organic</option><option>Conventional</option><option>Other</option></select></label><label>Irrigation method<select value={form.irrigation_method} onChange={(e) => setForm({ ...form, irrigation_method: e.target.value })}><option value="">Rain-fed / not specified</option><option>Drip</option><option>Sprinkler</option><option>Furrow</option><option>Manual watering</option><option>Other</option></select></label><label>Years farming<input type="number" min="0" max="100" value={form.farming_experience_years} onChange={(e) => setForm({ ...form, farming_experience_years: e.target.value })} /></label><label>Farming interests <span className="optional">(comma separated)</span><input value={form.farming_interests} onChange={(e) => setForm({ ...form, farming_interests: e.target.value })} placeholder="Soil health, markets, irrigation" /></label><label className="profile-wide-field">Farming goals<textarea rows={3} maxLength={1000} value={form.farming_goals} onChange={(e) => setForm({ ...form, farming_goals: e.target.value })} /></label><label className="profile-preference-check"><input type="checkbox" checked={form.preferred_notifications} onChange={(e) => setForm({ ...form, preferred_notifications: e.target.checked })} /> Receive farm notifications</label><label className="profile-preference-check"><input type="checkbox" checked={form.personalize_assistant} onChange={(e) => setForm({ ...form, personalize_assistant: e.target.checked })} /> Share district and farming preferences with the AI assistant for relevant personalization</label><label>First name<input value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label><label>Last name<input value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label><label>Email address<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>District<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label><label>Phone<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label></div>{notice && <div className="success-message"><Check size={15} />{notice}</div>}{error && <InlineNotice message={error} />}<div className="form-actions"><span>Role: {roleLabel(user.role)} · Roles are assigned by an administrator.</span><button className="button button-primary">{t("save")}</button></div></form><section className="panel profile-farms"><div className="panel-heading"><div><h3>Registered farms</h3><p>Farm details are managed with each field record.</p></div><span className="admin-count-pill">{farms.length}</span></div>{farms.length ? farms.map((farm) => <div className="profile-farm-row" key={farm.id}><span className="admin-crop-icon"><Tractor size={16} /></span><span><strong>{farm.name}</strong><small>{farm.district} | {farm.size_hectares} ha | {farm.crop || "Crop not recorded"} | {farm.soil_type.replace(/_/g, " ")}</small></span></div>) : <p className="profile-farms-empty">Add a farm to connect crop, soil, size, and location details to your profile.</p>}</section></>;
+  return <><PageHeading eyebrow="ACCOUNT" title="Profile settings" description="Manage the account information used in your AgriCloud workspace." /><form className="panel profile-form" onSubmit={submit}><div className="profile-intro"><UserAvatar user={user} className="profile-large-avatar" /><div className="profile-identity"><h3>{user.first_name || user.username} {user.last_name}</h3><span>{roleLabel(user.role)} · {user.username}</span><div className="profile-photo-actions"><input ref={photoInput} className="profile-file-input" type="file" accept="image/jpeg,image/png,image/webp" aria-label="Choose a profile picture" disabled={photoBusy} onChange={(event) => { const file = event.target.files?.[0]; if (file) void uploadPhoto(file); event.target.value = ""; }} /><button type="button" className="button button-secondary button-small" disabled={photoBusy} onClick={() => photoInput.current?.click()}>{photoBusy ? "Updating photo…" : user.profile_image ? "Change photo" : "Upload photo"}</button>{user.profile_image && <button type="button" className="text-button profile-remove-photo" disabled={photoBusy} onClick={() => void removePhoto()}>Remove</button>}<small>JPG, PNG or WebP · Up to 5 MB</small></div></div></div><div className="form-grid"><label>First name<input value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></label><label>Last name<input value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></label><label>Email address<input type="email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /></label><label>District<input value={form.district} onChange={(e) => setForm({ ...form, district: e.target.value })} /></label><label>Phone<input value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /></label></div>{notice && <div className="success-message"><Check size={15} />{notice}</div>}{error && <InlineNotice message={error} />}<div className="form-actions"><span>Role: {roleLabel(user.role)} · Roles are assigned by an administrator.</span><button className="button button-primary">Save changes</button></div></form></>;
 }
 
 function UserAvatar({ user, className }: { user: User; className: string }) {

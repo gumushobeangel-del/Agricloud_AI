@@ -14,11 +14,6 @@ AgriCloud AI is a Uganda-focused agricultural intelligence platform with a Djang
 - Harvest tracking and a farm-specific yield reference estimate from recorded annual harvests or sourced yield benchmarks, with recent historical climate signals shown separately.
 - Uganda commodity-price comparisons and trends from attributed WFP market observations, supplemented by administrator-entered records.
 - Dark forest-green responsive dashboard, farm management, weather view, planting advisor, yield forecast and market intelligence.
-- Guided farmer onboarding and editable profiles with language, farming interests, experience, irrigation, goals, and notification preferences.
-- Browser speech input and speech output controls for the existing AI assistant. Availability depends on the device and browser's installed language services.
-- English, Luganda, Runyankole, and Swahili interface dictionaries for shared navigation and core workspace labels; Ateso can be selected for AI replies, while its interface currently falls back to English. Translation coverage is being expanded across the application.
-- PWA app shell and per-user IndexedDB snapshots for offline farm profiles, verified crop guides, planting plans, and harvest history. A harvest can be queued offline and synced with a server idempotency key; rejected records remain flagged for review.
-- Offline mode is read-only for previously saved farm information except harvest entry. AI, weather, maps, and market feeds need a connection. Browser storage is device-local, not encrypted, so sign out removes the cached workspace; queued harvests remain scoped to the same account until its next sign-in.
 - OpenStreetMap/Leaflet farm map, Recharts climate visualization, loading/error/empty states.
 - API documentation at `/api/docs/`.
 

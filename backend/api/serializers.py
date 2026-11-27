@@ -13,32 +13,11 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = (
-            "id", "username", "email", "first_name", "last_name", "role", "district", "phone", "profile_image",
-            "preferred_language", "farming_method", "irrigation_method", "farming_experience_years",
-            "farming_interests", "farming_goals", "preferred_notifications", "onboarding_completed", "onboarding_step",
-            "personalize_assistant",
-        )
+        fields = ("id", "username", "email", "first_name", "last_name", "role", "district", "phone", "profile_image")
         read_only_fields = ("id", "role")
 
     def get_profile_image(self, user):
         return user.profile_image.url if user.profile_image else None
-
-    def validate_farming_experience_years(self, value):
-        if value is not None and value > 100:
-            raise serializers.ValidationError("Enter a number from 0 to 100.")
-        return value
-
-    def validate_farming_interests(self, value):
-        if not isinstance(value, list) or len(value) > 20 or any(not isinstance(item, str) or len(item) > 80 for item in value):
-            raise serializers.ValidationError("Choose up to 20 farming interests.")
-        return [item.strip() for item in value if item.strip()]
-
-    def validate_onboarding_step(self, value):
-        if value not in range(3):
-            raise serializers.ValidationError("Onboarding step must be between 0 and 2.")
-        return value
-
 
 class ProfileImageUploadSerializer(serializers.Serializer):
     profile_image = serializers.ImageField()
@@ -128,24 +107,10 @@ class RecommendationSerializer(serializers.ModelSerializer):
 class HarvestRecordSerializer(serializers.ModelSerializer):
     farm_name = serializers.CharField(source="farm.name", read_only=True)
     recorded_by = serializers.PrimaryKeyRelatedField(read_only=True)
-    client_key = serializers.UUIDField(required=False, write_only=True)
-
     class Meta:
         model = HarvestRecord
-        fields = ("id", "farm", "farm_name", "crop", "harvest_date", "quantity_kg", "recorded_by", "created_at", "client_key")
+        fields = ("id", "farm", "farm_name", "crop", "harvest_date", "quantity_kg", "recorded_by", "created_at")
         read_only_fields = ("id", "farm_name", "recorded_by", "created_at")
-
-    def create(self, validated_data):
-        client_key = validated_data.get("client_key")
-        recorded_by = validated_data.get("recorded_by")
-        if client_key and recorded_by:
-            record, _created = HarvestRecord.objects.get_or_create(
-                recorded_by=recorded_by,
-                client_key=client_key,
-                defaults=validated_data,
-            )
-            return record
-        return super().create(validated_data)
 
     def validate_crop(self, value):
         if not value.strip() or len(value.strip()) > 100:
