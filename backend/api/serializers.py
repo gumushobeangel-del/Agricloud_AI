@@ -13,11 +13,31 @@ class UserSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ("id", "username", "email", "first_name", "last_name", "role", "district", "phone", "profile_image")
+        fields = (
+            "id", "username", "email", "first_name", "last_name", "role", "district", "phone", "profile_image",
+            "preferred_language", "farming_method", "irrigation_method", "farming_experience_years",
+            "farming_interests", "farming_goals", "preferred_notifications", "onboarding_completed", "onboarding_step",
+            "personalize_assistant",
+        )
         read_only_fields = ("id", "role")
 
     def get_profile_image(self, user):
         return user.profile_image.url if user.profile_image else None
+
+    def validate_farming_experience_years(self, value):
+        if value is not None and value > 100:
+            raise serializers.ValidationError("Enter a number from 0 to 100.")
+        return value
+
+    def validate_farming_interests(self, value):
+        if not isinstance(value, list) or len(value) > 20 or any(not isinstance(item, str) or len(item) > 80 for item in value):
+            raise serializers.ValidationError("Choose up to 20 farming interests.")
+        return [item.strip() for item in value if item.strip()]
+
+    def validate_onboarding_step(self, value):
+        if value not in range(3):
+            raise serializers.ValidationError("Onboarding step must be between 0 and 2.")
+        return value
 
 
 class ProfileImageUploadSerializer(serializers.Serializer):
@@ -108,11 +128,24 @@ class RecommendationSerializer(serializers.ModelSerializer):
 class HarvestRecordSerializer(serializers.ModelSerializer):
     farm_name = serializers.CharField(source="farm.name", read_only=True)
     recorded_by = serializers.PrimaryKeyRelatedField(read_only=True)
+    client_key = serializers.UUIDField(required=False, write_only=True)
 
     class Meta:
         model = HarvestRecord
-        fields = ("id", "farm", "farm_name", "crop", "harvest_date", "quantity_kg", "recorded_by", "created_at")
+        fields = ("id", "farm", "farm_name", "crop", "harvest_date", "quantity_kg", "recorded_by", "created_at", "client_key")
         read_only_fields = ("id", "farm_name", "recorded_by", "created_at")
+
+    def create(self, validated_data):
+        client_key = validated_data.get("client_key")
+        recorded_by = validated_data.get("recorded_by")
+        if client_key and recorded_by:
+            record, _created = HarvestRecord.objects.get_or_create(
+                recorded_by=recorded_by,
+                client_key=client_key,
+                defaults=validated_data,
+            )
+            return record
+        return super().create(validated_data)
 
     def validate_crop(self, value):
         if not value.strip() or len(value.strip()) > 100:
@@ -133,7 +166,25 @@ class HarvestRecordSerializer(serializers.ModelSerializer):
 class CropYieldBenchmarkSerializer(serializers.ModelSerializer):
     class Meta:
         model = CropYieldBenchmark
-        fields = ("crop", "district", "reference_year", "yield_kg_per_hectare", "source_title", "source_url")
+        fields = ("id", "crop", "district", "reference_year", "yield_kg_per_hectare", "source_title", "source_url")
+        read_only_fields = ("id",)
+
+    def validate_reference_year(self, value):
+        if value > timezone.localdate().year:
+            raise serializers.ValidationError("Reference year cannot be in the future.")
+        return value
+
+    def validate_yield_kg_per_hectare(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Reference yield must be greater than zero.")
+        return value
+
+    def validate(self, attrs):
+        if not (attrs.get("source_title", getattr(self.instance, "source_title", "")) or "").strip():
+            raise serializers.ValidationError({"source_title": "A source title is required."})
+        if not (attrs.get("source_url", getattr(self.instance, "source_url", "")) or "").strip():
+            raise serializers.ValidationError({"source_url": "A source URL is required."})
+        return attrs
 
 
 class MarketPriceSerializer(serializers.ModelSerializer):
@@ -143,6 +194,16 @@ class MarketPriceSerializer(serializers.ModelSerializer):
             "id", "commodity", "market", "district", "price", "unit", "currency",
             "observed_at", "source_title", "source_url",
         )
+
+    def validate_price(self, value):
+        if value <= 0:
+            raise serializers.ValidationError("Price must be greater than zero.")
+        return value
+
+    def validate_observed_at(self, value):
+        if value > timezone.localdate():
+            raise serializers.ValidationError("Observation date cannot be in the future.")
+        return value
 
 
 class FarmQuestionSerializer(serializers.ModelSerializer):

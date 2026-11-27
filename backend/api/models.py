@@ -11,11 +11,30 @@ class User(AbstractUser):
         ADMIN = "admin", "Administrator"
 
     role = models.CharField(max_length=16, choices=Role.choices, default=Role.FARMER)
+    class Language(models.TextChoices):
+        ENGLISH = "en", "English"
+        LUGANDA = "lg", "Luganda"
+        RUNYANKOLE = "nyn", "Runyankole"
+        ATESO = "te", "Ateso"
+        SWAHILI = "sw", "Swahili"
+
     district = models.CharField(max_length=100, blank=True)
     phone = models.CharField(max_length=30, blank=True)
     profile_image = models.ImageField(upload_to="profile-pictures/", blank=True, null=True)
+    preferred_language = models.CharField(max_length=8, choices=Language.choices, default=Language.ENGLISH)
+    farming_method = models.CharField(max_length=100, blank=True)
+    irrigation_method = models.CharField(max_length=100, blank=True)
+    farming_experience_years = models.PositiveSmallIntegerField(null=True, blank=True)
+    farming_interests = models.JSONField(default=list, blank=True)
+    farming_goals = models.TextField(blank=True)
+    personalize_assistant = models.BooleanField(default=False)
+    preferred_notifications = models.BooleanField(default=True)
+    onboarding_completed = models.BooleanField(default=False)
+    onboarding_step = models.PositiveSmallIntegerField(default=0)
 
     def save(self, *args, **kwargs):
+        if self.is_superuser:
+            self.role = self.Role.ADMIN
         self.is_staff = self.role == self.Role.ADMIN or self.is_superuser
         super().save(*args, **kwargs)
 
@@ -106,10 +125,14 @@ class HarvestRecord(models.Model):
         null=True,
         related_name="harvest_records",
     )
+    client_key = models.UUIDField(null=True, blank=True, editable=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
         ordering = ["-harvest_date", "-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["recorded_by", "client_key"], condition=models.Q(client_key__isnull=False), name="unique_recorded_harvest_client_key"),
+        ]
 
     def clean(self):
         if self.quantity_kg is not None and self.quantity_kg <= 0:

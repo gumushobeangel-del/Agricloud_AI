@@ -3,6 +3,7 @@ import ReactDOM from "react-dom/client";
 import "leaflet/dist/leaflet.css";
 import "./styles.css";
 import App from "./App";
+import { LanguageProvider } from "./i18n";
 
 class AppErrorBoundary extends React.Component<React.PropsWithChildren, { failed: boolean }> {
   state = { failed: false };
@@ -22,7 +23,13 @@ class AppErrorBoundary extends React.Component<React.PropsWithChildren, { failed
 ReactDOM.createRoot(document.getElementById("root")!).render(
   <React.StrictMode>
     <AppErrorBoundary>
-      <App />
+      <LanguageProvider><App /></LanguageProvider>
     </AppErrorBoundary>
   </React.StrictMode>,
 );
+
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js").catch(() => undefined);
+  });
+}

@@ -5,6 +5,16 @@ export type User = {
   first_name: string;
   last_name: string;
   role: "farmer" | "extension" | "admin";
+  preferred_language: "en" | "lg" | "nyn" | "te" | "sw";
+  farming_method: string;
+  irrigation_method: string;
+  farming_experience_years: number | null;
+  farming_interests: string[];
+  farming_goals: string;
+  personalize_assistant: boolean;
+  preferred_notifications: boolean;
+  onboarding_completed: boolean;
+  onboarding_step: number;
   district: string;
   phone: string;
   profile_image: string | null;
@@ -265,5 +275,6 @@ export async function api<T>(path: string, options: RequestInit = {}): Promise<T
     }
     throw new ApiError(message, response.status);
   }
+  if (response.status === 204) return undefined as T;
   return response.json() as Promise<T>;
 }

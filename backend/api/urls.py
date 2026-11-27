@@ -2,13 +2,15 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    AdminOverviewView, AdminUsersView, CropViewSet, FarmQuestionViewSet, FarmViewSet, MeView, ProfileImageView, RegisterView, analytics, extension_overview, health,
+    AdminOverviewView, AdminUsersView, CropViewSet, CropYieldBenchmarkViewSet, FarmQuestionViewSet, FarmViewSet, MarketPriceAdminViewSet, MeView, ProfileImageView, RegisterView, analytics, extension_overview, health,
     assistant_chat, climate_risks, current_weather, CropDiseaseView, harvest_records, irrigation, logout, market_intelligence, mark_notification_read, notifications, password_reset_confirm, password_reset_request, recommendation_list, recommendations, weather, yield_forecast,
 )
 
 router = DefaultRouter()
 router.register("farms", FarmViewSet, basename="farm")
 router.register("crops", CropViewSet, basename="crop")
+router.register("admin/yield-benchmarks", CropYieldBenchmarkViewSet, basename="admin-yield-benchmark")
+router.register("admin/market-prices", MarketPriceAdminViewSet, basename="admin-market-price")
 router.register("questions", FarmQuestionViewSet, basename="question")
 
 urlpatterns = [

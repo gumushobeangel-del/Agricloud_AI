@@ -13,6 +13,13 @@ class CanManageCrop(BasePermission):
         return request.method in SAFE_METHODS or request.user.role == "admin" or request.user.is_staff
 
 
+class IsAgriCloudAdmin(BasePermission):
+    """Allow system reference data management only to AgriCloud administrators."""
+
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_authenticated and request.user.role == "admin")
+
+
 class CanAccessQuestion(BasePermission):
     def has_object_permission(self, request, view, obj):
         if request.user.role in {"admin", "extension"} or request.user.is_staff:

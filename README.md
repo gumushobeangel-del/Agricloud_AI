@@ -14,6 +14,11 @@ AgriCloud AI is a Uganda-focused agricultural intelligence platform with a Djang
 - Harvest tracking and a farm-specific yield reference estimate from recorded annual harvests or sourced yield benchmarks, with recent historical climate signals shown separately.
 - Uganda commodity-price comparisons and trends from attributed WFP market observations, supplemented by administrator-entered records.
 - Dark forest-green responsive dashboard, farm management, weather view, planting advisor, yield forecast and market intelligence.
+- Guided farmer onboarding and editable profiles with language, farming interests, experience, irrigation, goals, and notification preferences.
+- Browser speech input and speech output controls for the existing AI assistant. Availability depends on the device and browser's installed language services.
+- English, Luganda, Runyankole, and Swahili interface dictionaries for shared navigation and core workspace labels; Ateso can be selected for AI replies, while its interface currently falls back to English. Translation coverage is being expanded across the application.
+- PWA app shell and per-user IndexedDB snapshots for offline farm profiles, verified crop guides, planting plans, and harvest history. A harvest can be queued offline and synced with a server idempotency key; rejected records remain flagged for review.
+- Offline mode is read-only for previously saved farm information except harvest entry. AI, weather, maps, and market feeds need a connection. Browser storage is device-local, not encrypted, so sign out removes the cached workspace; queued harvests remain scoped to the same account until its next sign-in.
 - OpenStreetMap/Leaflet farm map, Recharts climate visualization, loading/error/empty states.
 - API documentation at `/api/docs/`.
 
@@ -64,6 +69,13 @@ To use PostgreSQL, set `DB_ENGINE=postgresql`, `DB_NAME`, `DB_USER`, `DB_PASSWOR
 | POST | `/api/auth/token/refresh/` | Refresh access token |
 | POST | `/api/auth/logout/` | Revoke the supplied refresh token |
 | GET/PATCH | `/api/auth/me/` | View or update current profile |
+| GET | `/api/admin/overview/` | Administrator-only system totals for accounts, farms, questions and reference data |
+| GET | `/api/admin/users/` | Administrator-only account directory |
+| PATCH | `/api/admin/users/{id}/` | Change a user's role or active status (the last active administrator is protected) |
+| GET/POST | `/api/admin/yield-benchmarks/` | List or add sourced district/national yield benchmarks (administrator only) |
+| GET/PATCH/DELETE | `/api/admin/yield-benchmarks/{id}/` | Maintain yield benchmark records (administrator only) |
+| GET/POST | `/api/admin/market-prices/` | List or add sourced market observations (administrator only) |
+| GET/PATCH/DELETE | `/api/admin/market-prices/{id}/` | Maintain market observation records (administrator only) |
 | POST | `/api/auth/me/profile-image/` | Upload or replace the signed-in user's profile picture |
 | DELETE | `/api/auth/me/profile-image/` | Remove the signed-in user's profile picture |
 | GET/POST | `/api/farms/` | List or create farms |
@@ -107,7 +119,7 @@ Yield estimates use the farm's average recorded annual production when available
 
 Market intelligence imports the public [WFP Uganda Food Prices dataset on HDX](https://data.humdata.org/dataset/wfp-food-prices-for-uganda), including each observation's date, market, district, currency, unit, retail/wholesale type, and source attribution. The feed is cached for six hours and older than one year or future-dated observations are excluded. These are survey observations, not guaranteed current farm-gate buying offers. Price spreads compare only matching commodities, units, currencies, and price types, and exclude transport, quality and fees. If the WFP feed is unavailable, the API reports that condition and shows any available administrator-entered records. The dataset is provided under [CC BY-IGO](https://creativecommons.org/licenses/by/3.0/igo/legalcode).
 
-Administrators can sign into Django Admin at `/admin/` to manage users, assign extension/admin roles, maintain the source-verified crop catalog, add sourced yield benchmarks, and enter market-price observations with their market, district, unit, currency, observation date and source URL. No sample yield values or market prices are preloaded. The initial superuser is created with the command above.
+Administrators can use the in-app **System administration** control room to manage user roles/access, maintain the source-verified crop catalog, add sourced yield benchmarks, and enter or remove market-price observations with their market, district, unit, currency, observation date and source URL. Django Admin remains available at `/admin/` for broader database maintenance. No sample yield values or market prices are preloaded. The initial superuser is created with the command above and is automatically assigned the AgriCloud Administrator role when migrations are applied.
 
 ## Security and production notes
 

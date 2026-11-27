@@ -70,6 +70,20 @@ class FarmApiTests(TestCase):
         response = self.client.post("/api/farms/", {**self.payload, "latitude": "100"}, format="json")
         self.assertEqual(response.status_code, 400)
 
+    def test_farmer_can_save_language_profile_and_onboarding_progress(self):
+        response = self.client.patch("/api/auth/me/", {
+            "preferred_language": "lg", "farming_method": "Mixed farming",
+            "farming_interests": ["maize", "beans"], "farming_goals": "Improve soil health",
+            "personalize_assistant": True, "onboarding_step": 1,
+        }, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.owner.refresh_from_db()
+        self.assertEqual(self.owner.preferred_language, "lg")
+        self.assertEqual(self.owner.farming_interests, ["maize", "beans"])
+        self.assertTrue(self.owner.personalize_assistant)
+        self.assertEqual(self.owner.onboarding_step, 1)
+        self.assertEqual(response.data["role"], "farmer")
+
     def test_farm_data_is_private(self):
         farm = Farm.objects.create(owner=self.other, name="Private", district="Mbale", size_hectares=1, latitude=1, longitude=34)
         self.assertEqual(self.client.get(f"/api/farms/{farm.id}/").status_code, 404)
@@ -480,6 +494,17 @@ class WeatherServiceTests(TestCase):
         self.assertEqual(self.owner.notifications.count(), 1)
         fetch.assert_called_once()
 
+    @patch("api.views.fetch_daily_weather")
+    def test_recommendation_respects_notification_preference(self, fetch):
+        farm = Farm.objects.create(owner=self.owner, name="Kawanda", district="Wakiso", crop="maize", soil_type="loam", size_hectares=1, latitude=0.419, longitude=32.554)
+        self.owner.preferred_notifications = False
+        self.owner.save(update_fields=["preferred_notifications"])
+        self.client.force_authenticate(self.owner)
+        fetch.return_value = {"observations": []}
+        response = self.client.post("/api/recommendations/", {"farm_id": farm.id, "crop": "beans"}, format="json")
+        self.assertEqual(response.status_code, 201)
+        self.assertEqual(self.owner.notifications.count(), 0)
+
     def test_notification_read_is_scoped_to_its_owner(self):
         farm = Farm.objects.create(owner=self.owner, name="Kawanda", district="Wakiso", size_hectares=1, latitude=0.419, longitude=32.554)
         from .models import Notification
@@ -668,6 +693,21 @@ class YieldAndMarketApiTests(TestCase):
             "quantity_kg": "10",
         }, format="json")
         self.assertEqual(denied.status_code, 403)
+
+    def test_offline_harvest_retry_is_idempotent(self):
+        from uuid import uuid4
+
+        payload = {
+            "farm": self.farm.id, "crop": "maize",
+            "harvest_date": date.today().isoformat(), "quantity_kg": "850.5",
+            "client_key": str(uuid4()),
+        }
+        first = self.client.post("/api/harvests/", payload, format="json")
+        retry = self.client.post("/api/harvests/", payload, format="json")
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(retry.status_code, 201)
+        self.assertEqual(retry.data["id"], first.data["id"])
+        self.assertEqual(HarvestRecord.objects.filter(recorded_by=self.owner, client_key=payload["client_key"]).count(), 1)
 
     @patch("api.views.fetch_wfp_prices", return_value=[])
     def test_market_prices_filter_and_keep_source_attribution(self, fetch_prices):
