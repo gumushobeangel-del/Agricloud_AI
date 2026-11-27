@@ -3,7 +3,7 @@ import LandingPage from "./LandingPage";
 import {
   Activity, BarChart3, Bell, Bug, CalendarDays, Check, ChevronDown, ChevronRight, LogOut, Pencil,
   CloudSun, Droplets, Ellipsis, Leaf, MapPin, Menu, Plus, Search, ShieldAlert, Store, Upload, Wind,
-  MessageCircleQuestion, Sprout, Sun, Thermometer, Tractor, TrendingUp, X,
+  MessageCircleQuestion, Sprout, Sun, Thermometer, Tractor, TrendingUp, X, Users, ShieldCheck,
 } from "lucide-react";
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis,
@@ -11,9 +11,10 @@ import {
 import { MapContainer, TileLayer, CircleMarker, Popup } from "react-leaflet";
 import { api, ApiError, CropDiseaseResult, Farm, FarmQuestion, HarvestRecord, IrrigationPlan, LiveWeather, MarketIntelligence, MarketPrice, NotificationItem, Recommendation, User, Weather, YieldForecast } from "./api";
 
-type Page = "overview" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
+type Page = "overview" | "admin" | "farms" | "weather" | "advisor" | "disease" | "irrigation" | "yield" | "markets" | "map" | "assistant" | "questions" | "alerts" | "analytics" | "profile";
 const mainLinks: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "overview", label: "Dashboard", icon: Activity },
+  { id: "admin", label: "Administration", icon: ShieldCheck },
   { id: "farms", label: "Crop management", icon: Tractor },
   { id: "weather", label: "Weather", icon: CloudSun },
   { id: "advisor", label: "Planting advisor", icon: Sprout },
@@ -28,7 +29,7 @@ const mainLinks: { id: Page; label: string; icon: typeof Activity }[] = [
   { id: "analytics", label: "Reports", icon: TrendingUp },
 ];
 const pageTitles: Record<Page, string> = {
-  overview: "Overview", farms: "My farms", weather: "Weather intelligence", advisor: "Planting advisor",
+  overview: "Overview", admin: "System administration", farms: "My farms", weather: "Weather intelligence", advisor: "Planting advisor",
   disease: "Crop disease detection", irrigation: "Smart irrigation",
   yield: "Crop yield forecast", markets: "Market intelligence",
   map: "Farm map", assistant: "AI farming assistant", questions: "Farmer questions", alerts: "Climate risk alerts",
@@ -49,6 +50,7 @@ function App() {
     try {
       const current = await api<User>("/auth/me/");
       setUser(current);
+      setPage(current.role === "admin" ? "admin" : "overview");
     } catch (error) {
       // Always clear stale tokens on any auth or server error.
       localStorage.removeItem("agri_access");
@@ -129,9 +131,10 @@ function App() {
         <div className="brand"><div className="brand-mark"><Leaf size={18} fill="currentColor" /></div><span>agricloud<span className="brand-ai">.ai</span></span></div>
         <div className="workspace-label">WORKSPACE</div>
         <nav className="side-nav" aria-label="Main navigation">
-          {mainLinks.slice(0, 3).map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          {mainLinks.slice(0, 2).filter((item) => item.id !== "admin" || user.role === "admin").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          {mainLinks.slice(2, 4).map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
           <div className="nav-section">FIELD TOOLS</div>
-          {mainLinks.slice(3).filter((item) => item.id !== "questions" || user.role !== "farmer").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
+          {mainLinks.slice(4).filter((item) => item.id !== "questions" || user.role !== "farmer").map((item) => <NavItem key={item.id} item={item} active={page === item.id} onClick={() => { setPage(item.id); setMobileNav(false); }} />)}
         </nav>
         <div className="sidebar-bottom">
           <div className="season-card"><div className="season-icon"><Sun size={16} /></div><div><strong>Season watch</strong><span>Local climate context</span></div><ChevronRight size={15} /></div>
@@ -146,6 +149,7 @@ function App() {
         </header>
         <div className="content">
           {page === "overview" && <Dashboard user={user} farms={farms} go={setPage} />}
+          {page === "admin" && user.role === "admin" && <AdminPage user={user} farms={farms} go={setPage} />}
           {page === "farms" && <FarmsPage farms={farms} refresh={refreshFarms} readOnly={user.role === "extension"} />}
           {page === "weather" && <WeatherPage farms={farms} />}
           {page === "advisor" && <AdvisorPage farms={farms} />}
@@ -349,6 +353,87 @@ function CropDistributionChart({ data }: { data: { crop: string; count: number }
     </div>
     <div className="crop-chart-legend">{data.slice(0, 5).map((item, index) => <div key={item.crop}><span><i style={{ backgroundColor: cropChartColors[index % cropChartColors.length] }} />{item.crop}</span><strong>{item.count}</strong></div>)}</div>
   </div>;
+}
+
+type AdminSummary = { users: number; farmers: number; extension_workers: number; farms: number; open_questions: number; active_crops: number; verified_crops: number; market_records: number };
+type AdminUser = User & { is_active: boolean; date_joined: string };
+type CropRecord = { id: number; name: string; local_names: string; category: string; guidance_notes: string; source_title: string; source_url: string; verified: boolean; active: boolean };
+
+function AdminPage({ user, farms, go }: { user: User; farms: Farm[]; go: (page: Page) => void }) {
+  const [summary, setSummary] = useState<AdminSummary | null>(null);
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [crops, setCrops] = useState<CropRecord[]>([]);
+  const [search, setSearch] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [cropForm, setCropForm] = useState({ name: "", local_names: "", category: "", guidance_notes: "", source_title: "", source_url: "", verified: false, active: true });
+  const [savingCrop, setSavingCrop] = useState(false);
+  const loadAdmin = async () => {
+    setLoading(true); setError("");
+    try {
+      const [overview, directory, catalog] = await Promise.all([
+        api<AdminSummary>("/admin/overview/"), api<AdminUser[]>("/admin/users/"), api<CropRecord[]>("/crops/"),
+      ]);
+      setSummary(overview); setUsers(directory); setCrops(catalog);
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not load administration data."); }
+    finally { setLoading(false); }
+  };
+  useEffect(() => { void loadAdmin(); }, []);
+  const filteredUsers = users.filter((person) => `${person.first_name} ${person.last_name} ${person.username} ${person.email} ${person.district}`.toLowerCase().includes(search.toLowerCase()));
+  async function updateUser(id: number, changes: Partial<Pick<AdminUser, "role" | "is_active">>) {
+    setBusyId(id); setError(""); setNotice("");
+    try {
+      const updated = await api<AdminUser>(`/admin/users/${id}/`, { method: "PATCH", body: JSON.stringify(changes) });
+      setUsers((current) => current.map((person) => person.id === id ? updated : person));
+      setNotice("Account permissions updated.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not update this account."); }
+    finally { setBusyId(null); }
+  }
+  async function saveCrop(event: FormEvent) {
+    event.preventDefault(); setSavingCrop(true); setError(""); setNotice("");
+    try {
+      const created = await api<CropRecord>("/crops/", { method: "POST", body: JSON.stringify(cropForm) });
+      setCrops((current) => [...current, created].sort((a, b) => a.name.localeCompare(b.name)));
+      setSummary((current) => current ? { ...current, active_crops: current.active_crops + (created.active ? 1 : 0), verified_crops: current.verified_crops + (created.active && created.verified ? 1 : 0) } : current);
+      setCropForm({ name: "", local_names: "", category: "", guidance_notes: "", source_title: "", source_url: "", verified: false, active: true });
+      setNotice("Crop added to the system catalog.");
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not save this crop."); }
+    finally { setSavingCrop(false); }
+  }
+  async function toggleCrop(crop: CropRecord, key: "active" | "verified") {
+    setError(""); setNotice("");
+    try {
+      const updated = await api<CropRecord>(`/crops/${crop.id}/`, { method: "PATCH", body: JSON.stringify({ [key]: !crop[key] }) });
+      setCrops((current) => current.map((item) => item.id === crop.id ? updated : item));
+      setNotice(`${crop.name} ${key === "active" ? (updated.active ? "activated" : "archived") : (updated.verified ? "verified" : "verification removed")}.`);
+      void loadAdmin();
+    } catch (err) { setError(err instanceof Error ? err.message : "Could not update the crop catalog."); }
+  }
+  const shortcuts: { label: string; detail: string; icon: ReactNode; page: Page }[] = [
+    { label: "Farm network", detail: "Review and maintain registered farms", icon: <Tractor size={18} />, page: "farms" },
+    { label: "Farmer support", detail: "Respond to open field questions", icon: <MessageCircleQuestion size={18} />, page: "questions" },
+    { label: "Platform reports", detail: "Explore system wide farm analytics", icon: <TrendingUp size={18} />, page: "analytics" },
+    { label: "Market intelligence", detail: "Review market data and sources", icon: <Store size={18} />, page: "markets" },
+  ];
+  return <>
+    <div className="admin-welcome"><div><div className="eyebrow">AGRICLOUD · CONTROL ROOM</div><h1>System administration</h1><p>Manage farmer accounts, field records, and the verified crop knowledge behind AgriCloud.</p></div><div className="admin-welcome-badge"><ShieldCheck size={20} /><span><strong>Administrator</strong><small>Signed in as {user.first_name || user.username}</small></span></div></div>
+    {error && <InlineNotice message={error} />}{notice && <div className="success-message"><Check size={15} />{notice}</div>}
+    <div className="admin-stat-grid">
+      <MetricCard icon={<Users size={17} />} label="Accounts" value={summary?.users ?? (loading ? "…" : "—")} note={`${summary?.farmers ?? 0} farmer accounts`} tone="green" />
+      <MetricCard icon={<Tractor size={17} />} label="Registered farms" value={summary?.farms ?? (loading ? "…" : farms.length)} note="Across all districts" tone="lime" />
+      <MetricCard icon={<MessageCircleQuestion size={17} />} label="Open questions" value={summary?.open_questions ?? (loading ? "…" : "—")} note="Awaiting an expert response" tone="orange" />
+      <MetricCard icon={<Sprout size={17} />} label="Verified crops" value={summary ? `${summary.verified_crops} / ${summary.active_crops}` : loading ? "…" : "—"} note="Active catalog entries" tone="blue" />
+    </div>
+    <section className="admin-shortcuts" aria-label="Administration shortcuts">{shortcuts.map((item) => <button className="admin-shortcut" key={item.page} onClick={() => go(item.page)}><span>{item.icon}</span><div><strong>{item.label}</strong><small>{item.detail}</small></div><ChevronRight size={16} /></button>)}</section>
+    <section className="panel admin-users-panel"><div className="panel-heading admin-panel-heading"><div><h3>Account directory</h3><p>Assign system roles and manage account access.</p></div><label className="admin-search"><Search size={15} /><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search people or districts" /></label></div>
+      <div className="admin-table-wrap"><table className="admin-table"><thead><tr><th>Account</th><th>District</th><th>Role</th><th>Status</th><th>Joined</th><th /></tr></thead><tbody>{filteredUsers.map((person) => <tr key={person.id}><td><div className="admin-person"><UserAvatar user={person} className="avatar" /><span><strong>{person.first_name || person.username}{person.last_name ? ` ${person.last_name}` : ""}</strong><small>{person.email || person.username}</small></span></div></td><td>{person.district || "—"}</td><td><select aria-label={`Role for ${person.username}`} value={person.role} disabled={busyId === person.id || person.id === user.id} onChange={(event) => void updateUser(person.id, { role: event.target.value as User["role"] })}><option value="farmer">Farmer</option><option value="extension">Extension worker</option><option value="admin">Administrator</option></select></td><td><span className={`admin-status ${person.is_active ? "is-active" : "is-paused"}`}><i />{person.is_active ? "Active" : "Paused"}</span></td><td>{new Intl.DateTimeFormat("en-UG", { day: "numeric", month: "short", year: "numeric" }).format(new Date(person.date_joined))}</td><td><button className="admin-toggle" disabled={busyId === person.id || person.id === user.id} onClick={() => void updateUser(person.id, { is_active: !person.is_active })}>{person.id === user.id ? "You" : person.is_active ? "Suspend" : "Restore"}</button></td></tr>)}{!filteredUsers.length && <tr><td colSpan={6} className="admin-empty">{loading ? "Loading account directory…" : "No accounts match this search."}</td></tr>}</tbody></table></div>
+    </section>
+    <div className="admin-catalog-grid"><section className="panel admin-crops-panel"><div className="panel-heading"><div><h3>Crop knowledge catalog</h3><p>Verified entries are available to the planting advisor.</p></div><span className="admin-count-pill">{crops.length} crops</span></div><div className="admin-crop-list">{crops.map((crop) => <div className="admin-crop-row" key={crop.id}><span className="admin-crop-icon"><Sprout size={16} /></span><span className="admin-crop-copy"><strong>{crop.name}</strong><small>{crop.category || "General crop"} · {crop.source_title || "Source not added"}</small></span><button className={`admin-verify ${crop.verified ? "verified" : ""}`} disabled={!crop.verified && (!crop.source_title || !crop.source_url)} title={!crop.verified && !crop.source_url ? "Add a source title and URL before verification" : "Toggle verified status"} onClick={() => void toggleCrop(crop, "verified")}>{crop.verified ? <><Check size={12} /> Verified</> : "Verify"}</button><button className="admin-toggle" onClick={() => void toggleCrop(crop, "active")}>{crop.active ? "Archive" : "Restore"}</button></div>)}{!crops.length && <div className="admin-empty">No crop records yet. Add a crop to start building the catalog.</div>}</div></section>
+      <form className="panel admin-add-crop" onSubmit={(event) => void saveCrop(event)}><div className="panel-heading"><div><h3>Add a crop</h3><p>Source details are required before an entry can be verified.</p></div></div><div className="admin-crop-form"><label>Crop name<input required value={cropForm.name} onChange={(event) => setCropForm({ ...cropForm, name: event.target.value })} placeholder="e.g. Cassava" /></label><label>Category<input value={cropForm.category} onChange={(event) => setCropForm({ ...cropForm, category: event.target.value })} placeholder="Root crop" /></label><label>Local names<input value={cropForm.local_names} onChange={(event) => setCropForm({ ...cropForm, local_names: event.target.value })} placeholder="Names used locally" /></label><label>Guidance notes<textarea value={cropForm.guidance_notes} onChange={(event) => setCropForm({ ...cropForm, guidance_notes: event.target.value })} placeholder="Validated growing guidance" rows={3} /></label><label>Source title<input value={cropForm.source_title} onChange={(event) => setCropForm({ ...cropForm, source_title: event.target.value })} placeholder="Agricultural source" /></label><label>Source URL<input type="url" value={cropForm.source_url} onChange={(event) => setCropForm({ ...cropForm, source_url: event.target.value })} placeholder="https://" /></label></div><label className="admin-check-label"><input type="checkbox" checked={cropForm.verified} onChange={(event) => setCropForm({ ...cropForm, verified: event.target.checked })} /> Mark as verified (requires both source fields)</label><button className="button button-primary" disabled={savingCrop}>{savingCrop ? "Adding crop…" : <><Plus size={15} /> Add to catalog</>}</button></form></div>
+    <div className="admin-footnote"><ShieldCheck size={14} /><span>Role changes take effect immediately. Your own administrator account is protected, and the system always keeps at least one active administrator.</span></div>
+  </>;
 }
 
 function MetricCard({ icon, label, value, note, tone }: { icon: ReactNode; label: string; value: ReactNode; note: string; tone: string }) {

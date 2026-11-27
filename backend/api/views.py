@@ -109,6 +109,71 @@ class RegisterView(generics.CreateAPIView):
     serializer_class = RegisterSerializer
     permission_classes = [permissions.AllowAny]
 
+
+class AdminOverviewView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def get(self, request):
+        if request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Administrator access is required.")
+        return Response({
+            "users": User.objects.count(),
+            "farmers": User.objects.filter(role=User.Role.FARMER).count(),
+            "extension_workers": User.objects.filter(role=User.Role.EXTENSION).count(),
+            "farms": Farm.objects.count(),
+            "open_questions": FarmQuestion.objects.filter(status=FarmQuestion.Status.OPEN).count(),
+            "active_crops": Crop.objects.filter(active=True).count(),
+            "verified_crops": Crop.objects.filter(active=True, verified=True).count(),
+            "market_records": MarketPrice.objects.count(),
+        })
+
+
+class AdminUsersView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+
+    def _require_admin(self, request):
+        if request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Administrator access is required.")
+
+    def get(self, request):
+        self._require_admin(request)
+        users = User.objects.all().order_by("-date_joined")
+        return Response([{
+            **UserSerializer(user).data,
+            "is_active": user.is_active,
+            "date_joined": user.date_joined,
+        } for user in users])
+
+    def patch(self, request, user_id):
+        self._require_admin(request)
+        try:
+            target = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response({"detail": "User not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        role = request.data.get("role", target.role)
+        is_active = request.data.get("is_active", target.is_active)
+        valid_roles = {choice for choice, _label in User.Role.choices}
+        if not isinstance(role, str) or role not in valid_roles:
+            raise ValidationError({"role": "Choose a valid account role."})
+        if not isinstance(is_active, bool):
+            raise ValidationError({"is_active": "This value must be true or false."})
+        if target.pk == request.user.pk and (role != User.Role.ADMIN or not is_active):
+            raise ValidationError({"detail": "You cannot remove your own administrator access."})
+        if target.role == User.Role.ADMIN and (role != User.Role.ADMIN or not is_active):
+            remaining_admins = User.objects.filter(role=User.Role.ADMIN, is_active=True).exclude(pk=target.pk).count()
+            if remaining_admins == 0:
+                raise ValidationError({"detail": "At least one active administrator must remain."})
+
+        target.role = role
+        target.is_active = is_active
+        target.save(update_fields=["role", "is_active", "is_staff"])
+        return Response({
+            **UserSerializer(target).data,
+            "is_active": target.is_active,
+            "date_joined": target.date_joined,
+        })
+
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)

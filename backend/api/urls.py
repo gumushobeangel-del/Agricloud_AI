@@ -2,7 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
-    CropViewSet, FarmQuestionViewSet, FarmViewSet, MeView, ProfileImageView, RegisterView, analytics, extension_overview, health,
+    AdminOverviewView, AdminUsersView, CropViewSet, FarmQuestionViewSet, FarmViewSet, MeView, ProfileImageView, RegisterView, analytics, extension_overview, health,
     assistant_chat, climate_risks, current_weather, CropDiseaseView, harvest_records, irrigation, logout, market_intelligence, mark_notification_read, notifications, password_reset_confirm, password_reset_request, recommendation_list, recommendations, weather, yield_forecast,
 )
 
@@ -14,6 +14,9 @@ router.register("questions", FarmQuestionViewSet, basename="question")
 urlpatterns = [
     path("health/", health),
     path("auth/register/", RegisterView.as_view(), name="register"),
+    path("admin/overview/", AdminOverviewView.as_view(), name="admin-overview"),
+    path("admin/users/", AdminUsersView.as_view(), name="admin-users"),
+    path("admin/users/<int:user_id>/", AdminUsersView.as_view(), name="admin-user-detail"),
     path("auth/me/", MeView.as_view(), name="me"),
     path("auth/me/profile-image/", ProfileImageView.as_view(), name="profile-image"),
     path("auth/logout/", logout, name="logout"),
